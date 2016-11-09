@@ -1,6 +1,6 @@
 from dronekit import connect, VehicleMode
 from pymavlink import mavutil
-import time, signal, sys
+import time, signal, sys, math
 
 vehicle = None
 stopProgram = False
@@ -49,7 +49,7 @@ def print_vehicle_state():
 	print " Airspeed: %s" % vehicle.airspeed	# settable
 	print " Mode: %s" % vehicle.mode.name	# settable
 	print " Armed: %s" % vehicle.armed	# settable
-	
+
 def setVehiclePose(x, y, z, roll, pitch, yaw):
 	'''
 	usec 		: Timestamp (microseconds, synced to UNIX time or since system boot) (uint64_t)
@@ -63,11 +63,11 @@ def setVehiclePose(x, y, z, roll, pitch, yaw):
 	usec = int(round(time.time() * 1000))
 	msg = vehicle.message_factory.vision_position_estimate_encode(
 		usec,
-		x, y, z, 
+		x, y, z,
 		roll, pitch, yaw);
 	# send command to vehicle
 	vehicle.send_mavlink(msg)
-	
+
 def goto_position_target_local_ned(north, east, down):
 	"""
 	Send SET_POSITION_TARGET_LOCAL_NED command to request the vehicle fly to a specified
@@ -84,10 +84,24 @@ def goto_position_target_local_ned(north, east, down):
 		0, 0)	# yaw, yaw_rate (not supported yet, ignored in GCS_Mavlink)
 	# send command to vehicle
 	vehicle.send_mavlink(msg)
-	
+
+def set_attitude_target(quat):
+    msg = vehicle.message_factory.set_attitude_target_encode(
+    	0,
+    	0,                #target system
+    	0,                #target component
+    	0b11100010,       #type mask
+    	quat,			  #q
+    	0,                #body roll rate
+    	0,                #body pitch rate
+    	0,                #body yaw rate
+    	0)                #thrust
+	# send command to vehicle
+    veh1.send_mavlink(msg)
+
 def signal_handler():
 	stopProgram = True
-	
+
 signal.signal(signal.SIGINT, signal_handler)
 
 connection_string = "/dev/ttyS0"
@@ -100,13 +114,13 @@ print_vehicle_state()
 #	print "Vehicle not armed"
 #	vehicle.close()
 #	sys.exit(0)
-	
+
 def sendArbitraryTargets():
 	for i in range(0,100):
 		goto_position_target_local_ned(0,0,0)
 		time.sleep(0.02)
 		print i,".",
-		
+
 def switchToOffboard():
 	sendArbitraryTargets()
 	# Change the mode
@@ -114,7 +128,7 @@ def switchToOffboard():
 	while not vehicle.mode == "OFFBOARD":
 		print "Switching to offboard mode..."
 		time.sleep(1)
-	
+
 #sendArbitraryTargets()
 #switchToOffboard()
 '''
@@ -128,22 +142,44 @@ while (not stopProgram):# and vehicle.mode == "OFFBOARD":
 for i in range (0,100):
 	setVehiclePose(0,0,0,0,0,0)
 	time.sleep(0.02)
-	
+
+def makeYaw(angle):
+	w = 1.0
+	x = 0.0
+	y = 0.0
+	z = 0.0
+
+	#yaw motion
+	rad = angle * pi/180;
+	w = cos(rad/2)
+	z = sin(rad/2)
+
+	set_attitude_target([w x y z])
+
+count = 0
+ang = 2.0
 while not stopProgram:
 
-	print "Type: ", type(vehicle.location.local_frame)
+	count = count+1
+	n = vehicle.location.local_frame.north
+	e = vehicle.location.local_frame.east
+	d = vehicle.location.local_frame.down
+
 	if vehicle.mode == "OFFBOARD":
-		n = vehicle.location.local_frame.north
-		e = vehicle.location.local_frame.east
-		d = vehicle.location.local_frame.down
-		print "Mode : ", vehicle.mode
-		goto_position_target_local_ned(n,e,d)
+		#goto_position_target_local_ned(n,e,d)
+
+		if count%500 == 0:
+			ang = -ang
+			makeYaw(ang)
+			count = 0
+
 	else:
 		print "Waiting to switch offboard..."
-		goto_position_target_local_ned(0,0,0)
+		goto_position_target_local_ned(n,e,d)
+
 	print "Position: ", vehicle.location.local_frame
-	
-	time.sleep(0.2)
-	
+
+	time.sleep(0.01)
+
 print "Closing vehicle connection."
 vehicle.close()
