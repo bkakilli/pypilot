@@ -158,7 +158,9 @@ def makeYaw(angle):
 
 count = 0
 ang = 2.0
-while not stopProgram:
+period = 0.01	# seconds
+
+def mainLoop():
 
 	count = count+1
 	n = vehicle.location.local_frame.north
@@ -168,7 +170,7 @@ while not stopProgram:
 	if vehicle.mode == "OFFBOARD":
 		#goto_position_target_local_ned(n,e,d)
 
-		if count%500 == 0:
+		if count%(5*1/period) == 0:	# every N seconds
 			ang = -ang
 			makeYaw(ang)
 			count = 0
@@ -179,7 +181,19 @@ while not stopProgram:
 
 	print "Position: ", vehicle.location.local_frame
 
-	time.sleep(0.01)
+
+from periodicrun import periodicrun
+pr = periodicrun(period, mainLoop, accuracy=0.001)
+
+pr.run_thread()
+
+while True:
+	choice = input("Make your choice: ")
+	if choice == "q":
+		pr.interrupt()
+		break
+
+pr.join()
 
 print "Closing vehicle connection."
 vehicle.close()
