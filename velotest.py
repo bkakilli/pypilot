@@ -12,14 +12,15 @@ from dronekit import connect, VehicleMode
 from pymavlink import mavutil
 from bluetooth import *
 from struct import *
-from bluetooth import *
-from struct import *
 
 vehicle = None
 stopProgram = False
 globPose = (0,0,0,0,0,0,0)
 homePose_xyz = [0,0,0]
 homeSet = False
+
+speed = 0.01
+targetV = [0,0,0]
 
 def btConnection():
 	global globPose, homeSet
@@ -66,73 +67,26 @@ def btConnection():
 				homePose_xyz[1] = homePose_xyz[1] / 100
 				homePose_xyz[2] = homePose_xyz[2] / 100
 				print "Home position set: ", homePose_xyz
+	
+	print("Closing bluetooth connection.")
 	sock.close()
 
-def setVehiclePose(x, y, z, roll, pitch, yaw):
-	'''
-	usec 		: Timestamp (microseconds, synced to UNIX time or since system boot) (uint64_t)
-	x    		: Global X position (float)
-	y    		: Global Y position (float)
-	z    		: Global Z position (float)
-	roll 		: Roll angle in rad (float)
-	pitch		: Pitch angle in rad (float)
-	yaw  		: Yaw angle in rad (float)
-	'''
-	usec = int(round(time.time() * 1000))
-	msg = vehicle.message_factory.vision_position_estimate_encode(
-		usec,
-		x, y, z,
-		roll, pitch, yaw);
-	# send command to vehicle
-	vehicle.send_mavlink(msg)
-
-def setVehiclePose2(x, y, z):
-	'''
-	usec 		: Timestamp (microseconds, synced to UNIX time or since system boot) (uint64_t)
-	x    		: Global X position (float)
-	y    		: Global Y position (float)
-	z    		: Global Z position (float)
-	roll 		: Roll angle in rad (float)
-	pitch		: Pitch angle in rad (float)
-	yaw  		: Yaw angle in rad (float)
-	'''
-	usec = int(round(time.time() * 1000))
-	msg = vehicle.message_factory.att_pos_mocap_encode(
-		usec,
-		x, y, z);
-	# send command to vehicle
-	vehicle.send_mavlink(msg)
-
-def goto_position_target_local_ned(ned):
+	
+def send_ned_velocity_no_dur(velocity_x, velocity_y, velocity_z):
 	"""
-	Send SET_POSITION_TARGET_LOCAL_NED command to request the vehicle fly to a specified
-	location in the North, East, Down frame.
+	Move vehicle in direction based on specified velocity vectors.
 	"""
 	msg = vehicle.message_factory.set_position_target_local_ned_encode(
 		0,	   # time_boot_ms (not used)
 		0, 0,	# target system, target component
 		mavutil.mavlink.MAV_FRAME_LOCAL_NED, # frame
-		0b0000111111111000, # type_mask (only positions enabled)
-		ned[0], ned[1], ned[2],
-		0, 0, 0, # x, y, z velocity in m/s  (not used)
+		0b0000111111000111, # type_mask (only speeds enabled)
+		0, 0, 0, # x, y, z positions (not used)
+		velocity_x, velocity_y, velocity_z, # x, y, z velocity in m/s
 		0, 0, 0, # x, y, z acceleration (not supported yet, ignored in GCS_Mavlink)
 		0, 0)	# yaw, yaw_rate (not supported yet, ignored in GCS_Mavlink)
-	# send command to vehicle
+		
 	vehicle.send_mavlink(msg)
-
-def set_attitude_target(quat):
-    msg = vehicle.message_factory.set_attitude_target_encode(
-    	0,
-    	0,                #target system
-    	0,                #target component
-    	0b11100010,       #type mask
-    	quat,			  #q
-    	0,                #body roll rate
-    	0,                #body pitch rate
-    	0,                #body yaw rate
-    	0)                #thrust
-	# send command to vehicle
-    vehicle.send_mavlink(msg)
 	
 def send_ned_velocity(velocity_x, velocity_y, velocity_z, duration):
 	"""
@@ -177,75 +131,90 @@ def switchToOffboard():
 		print "Switching to offboard mode..."
 		time.sleep(1)
 
-def makeYaw(angle):
-	w = 1.0
-	x = 0.0
-	y = 0.0
-	z = 0.0
-
-	#yaw motion
-	rad = angle * math.pi/180;
-	w = math.cos(rad/2)
-	z = math.sin(rad/2)
-	
-	q = [w, x, y, z]
-	set_attitude_target(q)
-
-	
+def actuatorLoop():
+	global targetV
+	"""
+	Move vehicle in direction based on specified velocity vectors.
+	"""
+	msg = vehicle.message_factory.set_position_target_local_ned_encode(
+		0,	   # time_boot_ms (not used)
+		0, 0,	# target system, target component
+		mavutil.mavlink.MAV_FRAME_LOCAL_NED, # frame
+		0b0000111111000111, # type_mask (only speeds enabled)
+		0, 0, 0, # x, y, z positions (not used)
+		targetV[0], targetV[1], targetV[2], # x, y, z velocity in m/s
+		0, 0, 0, # x, y, z acceleration (not supported yet, ignored in GCS_Mavlink)
+		0, 0)	# yaw, yaw_rate (not supported yet, ignored in GCS_Mavlink)
+		
+	vehicle.send_mavlink(msg)
 	
 period = 0.05	# seconds
 
 ang = 0
 count = 0
+vx = False
+vy = False
+vz = False
+setOnOffboard = True
 def mainLoop():
-	if homeSet:
-		global count, ang, period, globPose, homeSet
-		count = count+1
-		setVehiclePose(globPose[0],globPose[1],globPose[2],0,0,0)
-		
-		#n = vehicle.location.local_frame.north
-		#e = vehicle.location.local_frame.east
-		#d = vehicle.location.local_frame.down
-		#print "Position: ", n, " ", e, " ", d
-		
-		if vehicle.mode == "OFFBOARD":
-			
-			# go to home
-			goto_position_target_local_ned( xyz2ned(homePose_xyz) )
-			
-			#if count%(5/period) == 0:	# every N seconds
-			#	goto_position_target_local_ned(0,0,0)
-			#	pass
-			#	ang = -ang
-			#	makeYaw(ang)
-			#	count = 0 
-			# makeYaw(0)
-			#else:
-			#	goto_position_target_local_ned(0,0,0)
+	global count, ang, period, globPose, homeSet, targetV, speed, vx,vy,vz, setOnOffboard
 
-		else:
-			#print "Waiting to switch offboard..."
-			goto_position_target_local_ned([0,0,0])
+	count = count+1
+	
+	#n = vehicle.location.local_frame.north
+	#e = vehicle.location.local_frame.east
+	#d = vehicle.location.local_frame.down
+	#print "Position: ", n, " ", e, " ", d
+	
+	if vehicle.mode == "OFFBOARD":
+					
+		#send_ned_velocity(0.0,-0.2,0.0,2)
+		#if vx:
+		#	send_ned_velocity(0.2,0.0,0.0,2)
+		#	vx = False
+		#elif vy:
+		#	send_ned_velocity(0.0,0.2,0.0,2)
+		#	vy = False
+		#elif vz:
+		#	send_ned_velocity(0.0,0.0,0.2,2)
+		#	vz = False
+		#else:
+		#	send_ned_velocity_no_dur(0,0,0)
+			
+		## go to home
+		#target = [0,0,0]
+		#
+		#d = target
+		#d[0] = d[0] - globPose[0]
+		#d[1] = d[1] - globPose[1]
+		#d[2] = d[2] - globPose[2]
+		## d is the distance vector to target
+		#
+		#v = math.sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]) / speed
+		#targetV[0] = v * globPose[0]
+		#targetV[1] = v * globPose[1]
+		#targetV[2] = v * globPose[2]
+		
+		targetV[0] = 0.0
+		targetV[1] = 0.0
+		targetV[2] = 0.0
 
-		print "Vehicle:   ", vehicle.location.local_frame
-		print "Bluetooth: ", globPose
-		print "Difference:", vehicle.location.local_frame.north-globPose[0], ", ", vehicle.location.local_frame.east-globPose[1], ", ", vehicle.location.local_frame.down, ", ", globPose[2]
-		print ""
+	else:
+		#print "Waiting to switch offboard..."
+		setOnOffboard = True
+		send_ned_velocity(0,0,0,1)
+
+	#print "Vehicle:   ", vehicle.location.local_frame
+	print "Bluetooth: ", globPose
+	#print "Difference:", vehicle.location.local_frame.north-globPose[0], ", ", vehicle.location.local_frame.east-globPose[1], ", ", vehicle.location.local_frame.down, ", ", globPose[2]
+	#print ""
 		
 def btTestLoop():
 	print "Global pose: ", globPose
 	
-testPose = [0,0,0]
-testPoseCount = 0
-def posEstTest():
-	global testPose, testPoseCount
-	if testPoseCount == 50:
-		testPoseCount = 0
-		print vehicle.location.local_frame
-	testPoseCount = testPoseCount+1
-	setVehiclePose2(testPose[0],testPose[1],testPose[2])
-	goto_position_target_local_ned([0,0,0])
-	
+
+# Start bt connection
+thread.start_new_thread(btConnection, ())
 
 # Connect to the vehicle
 connection_string = "/dev/ttyS0"
@@ -254,31 +223,20 @@ vehicle = connect(connection_string, baud=921600, wait_ready=False)
 print 'Connected to the vehice on ', connection_string
 
 time.sleep(1);
-#print_vehicle_state()
-
-#while not vehicle.armed:
-#	print "Vehicle not armed"
-#	vehicle.close()
-#	sys.exit(0)
-		
-# Start bt connection
-#thread.start_new_thread(btConnection, ())
-
-# Send some initial pose data
-for i in range (0,100):
-	setVehiclePose(0,0,0,0,0,0)
-	time.sleep(0.02)
 
 # Setup periodic loop and start it
 from periodicrun import periodicrun
-pr = periodicrun(period, posEstTest, accuracy=0.01)
+pr = periodicrun(period, mainLoop, accuracy=0.01)
+ac = periodicrun(period, actuatorLoop, accuracy=0.001)
 
 pr.run_thread()
+ac.run_thread()
 
 while not stopProgram:
 	choice = raw_input("Make your choice: ")
 	if str(choice) == "q":
 		pr.interrupt()
+		ac.interrupt()
 		stopProgram = True
 		break
 	elif str(choice) == "0":
@@ -297,10 +255,20 @@ while not stopProgram:
 		vehicle.mode = VehicleMode("OFFBOARD")
 		
 	elif str(choice) == "m":
-		vehicle.mode = VehicleMode("MANUAL")
+		vehicle.mode = VehicleMode("STABILIZE")
+		
+	elif str(choice) == "vx":
+		vx = True
+		
+	elif str(choice) == "vy":
+		vy = True
+		
+	elif str(choice) == "vz":
+		vz = True
 		
 
 pr.join()
+ac.join()
 
 print "Closing vehicle connection."
 vehicle.close()
