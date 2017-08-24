@@ -2,6 +2,10 @@
 # Author: Burak Kakillioglu
 # bkakilli.github.io
 # 08/23/2017
+#
+# ToDo:
+# Thread based manual command system
+# Curses support
 
 import time, signal, sys, math, thread, argparse, imp, logging
 
@@ -12,11 +16,9 @@ from struct import *
 
 from periodicrun import periodicrun
 
-class Controller:
+class Controller(object):
 
-    def __init__(self, lggr, cfg):
-
-        self.logger = lggr
+    def __init__(self, cfg):
 
         self.vehicle = None
         self.stopProgram = False
@@ -32,7 +34,7 @@ class Controller:
 
     def connectToVehicle(self):
         logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
-        vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
+        self.vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
         logger.info('Connected to the vehice on %s', self.cfg['port'])
 
     def arm_and_takeoff_nogps(self, aTargetAltitude):
@@ -44,35 +46,40 @@ class Controller:
         DEFAULT_TAKEOFF_THRUST = 0.7
         SMOOTH_TAKEOFF_THRUST = 0.6
 
-        logger.info("Basic pre-arm checks")
+        logger.info("Switch to STABILIZE mode fore arming.")
+        while not self.vehicle.mode == "STABILIZE":
+            self.vehicle.mode = VehicleMode("STABILIZE")
+            time.sleep(1)
+
+        #logger.info("Basic pre-arm checks")
         # Don't let the user try to arm until autopilot is ready
         # If you need to disable the arming check, just comment it with your own responsibility.
-        while not vehicle.is_armable:
-            logger.info(" Waiting for vehicle to initialise...")
-            time.sleep(1)
+        #while not self.vehicle.is_armable:
+        #    logger.info(" Waiting for vehicle to initialise...")
+        #    time.sleep(1)
 
 
         logger.info( "Arming motors")
-        # Copter should arm in GUIDED_NOGPS mode
-        vehicle.mode = VehicleMode("GUIDED_NOGPS")
-        vehicle.armed = True
-
-        while not vehicle.armed:
+        while not self.vehicle.armed:
             logger.info( " Waiting for arming...")
+            self.vehicle.armed = True
             time.sleep(1)
 
-        print "Taking off!"
+        while not self.vehicle.mode == "GUIDED_NOGPS":
+            self.vehicle.mode = VehicleMode("GUIDED_NOGPS")
+            time.sleep(1)
 
+        logger.info( "Taking off!")
         thrust = DEFAULT_TAKEOFF_THRUST
         while True:
-            current_altitude = vehicle.location.global_relative_frame.alt
-            logger.info( " Altitude: ", current_altitude)
+            current_altitude = self.vehicle.location.global_relative_frame.alt
+            logger.info( " Altitude: %f", current_altitude)
             if current_altitude >= aTargetAltitude*0.95: # Trigger just below target alt.
                 logger.info( "Reached target altitude")
                 break
             elif current_altitude >= aTargetAltitude*0.6:
                 thrust = SMOOTH_TAKEOFF_THRUST
-            set_attitude(thrust = thrust)
+            self.set_attitude(thrust = thrust)
             time.sleep(0.2)
 
 
@@ -92,17 +99,17 @@ class Controller:
         # Thrust >  0.5: Ascend
         # Thrust == 0.5: Hold the altitude
         # Thrust <  0.5: Descend
-        msg = vehicle.message_factory.set_attitude_target_encode(
+        msg = self.vehicle.message_factory.set_attitude_target_encode(
                      0,
                      0,                                         #target system
                      0,                                         #target component
                      0b00000000,                                #type mask: bit 1 is LSB
-                     to_quaternion(roll_angle, pitch_angle),    #q
+                     self.to_quaternion(roll_angle, pitch_angle),    #q
                      0,                                         #body roll rate in radian
                      0,                                         #body pitch rate in radian
                      math.radians(yaw_rate),                    #body yaw rate in radian
                      thrust)                                    #thrust
-        vehicle.send_mavlink(msg)
+        self.vehicle.send_mavlink(msg)
 
         if duration != 0:
             # Divide the duration into the frational and integer parts
@@ -114,7 +121,7 @@ class Controller:
             # Send command to vehicle on 1 Hz cycle
             for x in range(0,int(modf[1])):
                 time.sleep(1)
-                vehicle.send_mavlink(msg)
+                self.vehicle.send_mavlink(msg)
 
     def to_quaternion(self, roll = 0.0, pitch = 0.0, yaw = 0.0):
         """
@@ -135,28 +142,24 @@ class Controller:
         return [w, x, y, z]
 
     def setVehicleMode(self, mode):
-        vehicle.mode = VehicleMode(mode)
+        self.vehicle.mode = VehicleMode(mode)
 
     def send_attitude(self, att):
         print atts
 
-    def manualCommand(self, comm):
-        print 'Received command: ', comm;
-        if 'val' in comm:
-            self.manual[comm['type']](comm['val'])
-        else:
-            self.manual[comm['type']]
-
     def run(self):
-        #self.connectToVehicle()
+        self.connectToVehicle()
 
         self.cthread = periodicrun(cfg['guidancePeriod'], self.guidance, accuracy=0.001)
         self.athread = periodicrun(cfg['actuatorPeriod'], self.actuator, accuracy=0.001)
-        self.cthread.run_thread()
-        self.athread.run_thread()
+        #self.cthread.run_thread()
+        #self.athread.run_thread()
+
+        self.monitor()
 
     def stop(self):
         logger.debug('Controller shut down.')
+        self.vehicle.close()
         self.stopProgram = True
         self.athread.interrupt()
         self.cthread.interrupt()
@@ -169,7 +172,7 @@ class Controller:
     def guidance(self):
         if not self.stopProgram:
             logger.debug('Actuator loop started.')
-            print 'guidance'
+            print 'VehicleMode: ', self.vehicle.mode
             time.sleep(1)
 
     def actuator(self):
@@ -178,33 +181,66 @@ class Controller:
             print 'actuator'
             time.sleep(1)
 
-    manual = {
-    0: send_attitude,
-    1: setVehicleMode,
-    2: arm_and_takeoff_nogps
-    }
+
+    #manual = {
+    #0: send_attitude,
+    #1: setVehicleMode,
+    #2: arm_and_takeoff_nogps
+    #}
+    #
+    #def manualCommand(self, comm):
+    #    print 'Received command: ', comm;
+    #    if 'val' in comm:
+    #        self.manual[comm['type']](comm['val'])
+    #    else:
+    #        self.manual[comm['type']]
+
+    def monitor(self):
+        while True:
+            choice = raw_input("Make your choice: ")
+            if str(choice) == "q":
+                break
+
+            elif str(choice) == "o":
+                #self.manualCommand({'type': 1, 'val': 'GUIDED_NOGPS'})
+                self.setVehicleMode('GUIDED_NOGPS')
+
+            elif str(choice) == "m":
+                #self.manualCommand({'type': 1, 'val': 'STABILIZE'})
+                self.setVehicleMode('STABILIZE')
+
+            elif str(choice) == "t":
+                #self.manualCommand({'type': 2, 'val': self.cfg['takeoff_altitude']})
+                self.arm_and_takeoff_nogps(self.cfg['takeoff_altitude'])
+
+            elif str(choice) == "l":
+                #self.manualCommand({'type': 2, 'val': self.cfg['takeoff_altitude']})
+                self.setVehicleMode('LAND')
+
+            elif str(choice) == "w":
+                self.set_attitude(thrust = 0.7, duration=0.5)
+                self.set_attitude(thrust = 0.5)
+
+            elif str(choice) == "a":
+                self.set_attitude(thrust = 0.4, duration=0.5)
+                self.set_attitude(thrust = 0.5)
+
+            elif str(choice) == "y0":
+                self.set_attitude(yaw_rate = 0.1)
+
+            elif str(choice) == "y1":
+                self.set_attitude(yaw_rate = 0.1, duration=1)
+
+            elif str(choice) == "y5":
+                self.set_attitude(yaw_rate = 0.1, duration=5)
+
+        self.stop()
 
 #######################  Main Program  ##########################
 
-def monitor(controller):
-    while True:
-    	choice = raw_input("Make your choice: ")
-    	if str(choice) == "q":
-    		break
-
-    	elif str(choice) == "o":
-            controller.manualCommand({'type': 1, 'val': 'GUIDED_NOGPS'})
-
-    	elif str(choice) == "m":
-            controller.manualCommand({'type': 1, 'val': 'STABILIZE'})
-
-    	elif str(choice) == "t":
-            controller.manualCommand({'type': 2})
-
-    controller.stop()
 
 if __name__ == '__main__':
-    global controller
+
     # start logger
     logger = logging.getLogger('Controller')
     logger.setLevel(logging.INFO)
@@ -226,13 +262,10 @@ if __name__ == '__main__':
     elif cfg['verbose'] == 2:
         formatter = logging.Formatter('%(name)s | %(asctime)s: %(message)s')
         ch.setFormatter(formatter)
-        ch.setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
         logger.debug('Verbose level is set 2. Everything will be displayed as much as possible.')
+        print 'test'
 
-    controller = Controller(logger, cfg)
+    controller = Controller(cfg)
     controller.run()
-
-    # Jump to program loop
-    monitor(controller)
-
     controller.join()
