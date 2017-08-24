@@ -20,9 +20,10 @@ class Controller:
 
         self.vehicle = None
         self.stopProgram = False
-        self.globPose = (0,0,0,0,0,0,0)
+        self.globPose = [0,0,0,0,0,0,0]
         self.homePose_xyz = [0,0,0]
         self.homeSet = False
+        self.stopProgram = False
 
         self.cfg = cfg
 
@@ -34,10 +35,7 @@ class Controller:
         vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
         logger.info('Connected to the vehice on %s', self.cfg['port'])
 
-    def guidance():
-        print 'test'
-
-    def arm_and_takeoff_nogps(aTargetAltitude):
+    def arm_and_takeoff_nogps(self, aTargetAltitude):
         """
         Arms vehicle and fly to aTargetAltitude without GPS data.
         """
@@ -78,7 +76,7 @@ class Controller:
             time.sleep(0.2)
 
 
-    def set_attitude(roll_angle = 0.0, pitch_angle = 0.0, yaw_rate = 0.0, thrust = 0.5, duration = 0):
+    def set_attitude(self, roll_angle = 0.0, pitch_angle = 0.0, yaw_rate = 0.0, thrust = 0.5, duration = 0):
         """
         Note that from AC3.3 the message should be re-sent every second (after about 3 seconds
         with no message the velocity will drop back to zero). In AC3.2.1 and earlier the specified
@@ -118,7 +116,7 @@ class Controller:
                 time.sleep(1)
                 vehicle.send_mavlink(msg)
 
-    def to_quaternion(roll = 0.0, pitch = 0.0, yaw = 0.0):
+    def to_quaternion(self, roll = 0.0, pitch = 0.0, yaw = 0.0):
         """
         Convert degrees to quaternions
         """
@@ -136,11 +134,77 @@ class Controller:
 
         return [w, x, y, z]
 
+    def setVehicleMode(self, mode):
+        vehicle.mode = VehicleMode(mode)
+
+    def send_attitude(self, att):
+        print atts
+
+    def manualCommand(self, comm):
+        print 'Received command: ', comm;
+        if 'val' in comm:
+            self.manual[comm['type']](comm['val'])
+        else:
+            self.manual[comm['type']]
+
+    def run(self):
+        #self.connectToVehicle()
+
+        self.cthread = periodicrun(cfg['guidancePeriod'], self.guidance, accuracy=0.001)
+        self.athread = periodicrun(cfg['actuatorPeriod'], self.actuator, accuracy=0.001)
+        self.cthread.run_thread()
+        self.athread.run_thread()
+
+    def stop(self):
+        logger.debug('Controller shut down.')
+        self.stopProgram = True
+        self.athread.interrupt()
+        self.cthread.interrupt()
+
+
+    def join(self):
+        self.athread.join()
+        self.cthread.join()
+
     def guidance(self):
-        print 'test'
+        if not self.stopProgram:
+            logger.debug('Actuator loop started.')
+            print 'guidance'
+            time.sleep(1)
+
+    def actuator(self):
+        if not self.stopProgram:
+            logger.debug('Actuator loop started.')
+            print 'actuator'
+            time.sleep(1)
+
+    manual = {
+    0: send_attitude,
+    1: setVehicleMode,
+    2: arm_and_takeoff_nogps
+    }
+
+#######################  Main Program  ##########################
+
+def monitor(controller):
+    while True:
+    	choice = raw_input("Make your choice: ")
+    	if str(choice) == "q":
+    		break
+
+    	elif str(choice) == "o":
+            controller.manualCommand({'type': 1, 'val': 'GUIDED_NOGPS'})
+
+    	elif str(choice) == "m":
+            controller.manualCommand({'type': 1, 'val': 'STABILIZE'})
+
+    	elif str(choice) == "t":
+            controller.manualCommand({'type': 2})
+
+    controller.stop()
 
 if __name__ == '__main__':
-
+    global controller
     # start logger
     logger = logging.getLogger('Controller')
     logger.setLevel(logging.INFO)
@@ -166,9 +230,9 @@ if __name__ == '__main__':
         logger.debug('Verbose level is set 2. Everything will be displayed as much as possible.')
 
     controller = Controller(logger, cfg)
-    #controller.connectToVehicle()
+    controller.run()
 
-    pr = periodicrun(cfg['controllerPeriod'], controller.guidance, accuracy=0.01, lifetime=1)
-    pr.run_thread()
+    # Jump to program loop
+    monitor(controller)
 
-    pr.join()
+    controller.join()

@@ -4,6 +4,6 @@ cfg = {
     'baud': 115200,
     'wait_ready' : True,
     'actuatorPeriod': 0.05,
-    'controllerPeriod': 0.01,
+    'guidancePeriod': 0.01,
     'verbose': 2,   # 0,1,2
     }
