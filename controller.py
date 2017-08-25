@@ -31,6 +31,7 @@ class Controller(object):
 
         self.speed = 0.01
         self.targetV = [0,0,0]
+        self.posDelta = [0,0,0]
 
     def connectToVehicle(self):
         logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
@@ -170,16 +171,40 @@ class Controller(object):
         self.cthread.join()
 
     def guidance(self):
-        if not self.stopProgram:
-            logger.debug('Actuator loop started.')
-            print 'VehicleMode: ', self.vehicle.mode
-            time.sleep(1)
+        logger.debug('Actuator loop started.')
+        print 'VehicleMode: ', self.vehicle.mode
+        time.sleep(1)
 
+    # This actuator loop is executed in every cfg['actuatorPeriod'] sec
     def actuator(self):
-        if not self.stopProgram:
-            logger.debug('Actuator loop started.')
-            print 'actuator'
-            time.sleep(1)
+
+        # Create a roll pitch angle from PID controller
+        #self.pD = [delta_x, delta_y, delta_z]
+        pD = self.posDelta
+        PID = self.cfg.PID
+
+        roll_angle  = PID['P']*pD[0] + PID['I']*pD[0] + PID['D']*pD[0]
+        pitch_angle = PID['P']*pD[1] + PID['I']*pD[1] + PID['D']*pD[1]
+
+        # Non-linear cutoff
+        if roll_angle  > 5 roll_angle = 5
+        if pitch_angle > 5 roll_angle = 5
+
+        # Use defaults for the others
+        thrust = 0.5
+        yaw_rate = 0.0
+
+        msg = self.vehicle.message_factory.set_attitude_target_encode(
+                     0,
+                     0,                                         #target system
+                     0,                                         #target component
+                     0b00000000,                                #type mask: bit 1 is LSB
+                     self.to_quaternion(roll_angle, pitch_angle),    #q
+                     0,                                         #body roll rate in radian
+                     0,                                         #body pitch rate in radian
+                     math.radians(yaw_rate),                    #body yaw rate in radian
+                     thrust)                                    #thrust
+        self.vehicle.send_mavlink(msg)
 
 
     #manual = {
@@ -201,28 +226,24 @@ class Controller(object):
             if str(choice) == "q":
                 break
 
-            elif str(choice) == "o":
-                #self.manualCommand({'type': 1, 'val': 'GUIDED_NOGPS'})
+            elif str(choice) == "gn":
                 self.setVehicleMode('GUIDED_NOGPS')
 
             elif str(choice) == "m":
-                #self.manualCommand({'type': 1, 'val': 'STABILIZE'})
                 self.setVehicleMode('STABILIZE')
 
             elif str(choice) == "t":
-                #self.manualCommand({'type': 2, 'val': self.cfg['takeoff_altitude']})
                 self.arm_and_takeoff_nogps(self.cfg['takeoff_altitude'])
 
             elif str(choice) == "l":
-                #self.manualCommand({'type': 2, 'val': self.cfg['takeoff_altitude']})
                 self.setVehicleMode('LAND')
 
             elif str(choice) == "w":
                 self.set_attitude(thrust = 0.7, duration=0.5)
                 self.set_attitude(thrust = 0.5)
 
-            elif str(choice) == "a":
-                self.set_attitude(thrust = 0.4, duration=0.5)
+            elif str(choice) == "s":
+                self.set_attitude(thrust = 0.4, duration=1)
                 self.set_attitude(thrust = 0.5)
 
             elif str(choice) == "y0":
