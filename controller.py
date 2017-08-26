@@ -22,15 +22,15 @@ class Controller(object):
 
         self.vehicle = None
         self.stopProgram = False
-        self.globPose = [0,0,0,0,0,0,0]
-        self.homePose_xyz = [0,0,0]
+        self.globPose = np.array([0,0,0,0,0,0])
+        self.homePose = np.array([0,0,0,0,0,0])
         self.homeSet = False
 
         self.cfg = cfg
 
         self.speed = 0.01
-        self.targetV = [0,0,0]
-        self.posDelta = [0,0,0]
+        self.targetPos = np.array([0,0,0]
+        self.error = np.zeros((3,3))
 
     def connectToVehicle(self):
         logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
@@ -41,7 +41,13 @@ class Controller(object):
         print 'Position receiver thread started.'
         while not self.stopProgram:
             data, addr = self.udpsock.recvfrom(256) # buffer size is 1024 bytes
-            self.posDelta = [struct.unpack('d',data[32:40])[0]/1000, struct.unpack('d',data[40:48])[0]/1000, struct.unpack('d',data[48:56])[0]/1000]
+            self.globPose = [   struct.unpack('d',data[32:40])[0]/1000,
+                                struct.unpack('d',data[40:48])[0]/1000,
+                                struct.unpack('d',data[48:56])[0]/1000,
+                                struct.unpack('d',data[56:64])[0]/1000,
+                                struct.unpack('d',data[64:72])[0]/1000,
+                                struct.unpack('d',data[72:80])[0]/1000,
+                                ]
 
     def arm_and_takeoff_nogps(self, aTargetAltitude):
         """
@@ -193,22 +199,45 @@ class Controller(object):
     def actuator(self):
 
         # Create a roll pitch angle from PID controller
-        #self.pD = [delta_x, delta_y, delta_z]
-        pD = self.posDelta
-        PID = {'P': 5, 'I': 0, 'D': 0}#self.cfg['PID']
+        PID_xy = np.array(self.cfg['tuning']['PID_xy'])
+        PID_z  = np.array(self.cfg['tuning']['PID_z'])
 
+        gPos = self.globPose[:3]
+		theta = -globPose[5] #*np.pi/180	# yaw correction in radians
+		rotZ = np.array(
+						[[ np.cos(theta), -np.sin(theta), 0],
+						 [ np.sin(theta),  np.cos(theta), 0],
+						 [ 0            ,  0            , 1]]
+						)
 
-        roll_angle  = -PID['P']*pD[0] + PID['I']*pD[0] + PID['D']*pD[0]
-        pitch_angle = PID['P']*pD[1] + PID['I']*pD[1] + PID['D']*pD[1]
+		# Calculate the 3D error vector with corrected rotation
+		p_e = rotZ.dot(self.targetPos - gPos)
 
-        # Non-linear cutoff
-        if roll_angle  > 5:
-            roll_angle = 5
-        if pitch_angle > 5:
-            roll_angle = 5
+		# Update the error matrix
+		err = self.error
+		err = np.array(
+						[p_e[0], err[0,1]+p_e[0], err[0,0]-p_e[0]],
+						[p_e[1], err[1,1]+p_e[1], err[1,0]-p_e[1]],
+						[p_e[2], err[2,1]+p_e[2], err[2,0]-p_e[2]]
+		)
+		self.error = err
 
+		# Generate and set the target angle for XY plane
+		angle = err[:2,:] * PID_xy
+		thrust_add = err[3,:] * PID_z
+
+        roll_angle  = -angle[0]
+        pitch_angle = angle[1]
+		thrust = 0.5 + thrust_add
+
+        # Non-linear cutoff for safety
+		if self.cfg['tuning']['NONLIN_SAFETY']:
+			if roll_angle  > self.cfg['tuning']['MAX_SAFE_ANGLE']:
+				roll_angle = self.cfg['tuning']['MAX_SAFE_ANGLE']
+			if pitch_angle > self.cfg['tuning']['MAX_SAFE_ANGLE']:
+				roll_angle = self.cfg['tuning']['MAX_SAFE_ANGLE']
+        
         # Use defaults for the others
-        thrust = 0.5
         yaw_rate = 0.0
 
         msg = self.vehicle.message_factory.set_attitude_target_encode(
