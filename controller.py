@@ -8,11 +8,11 @@
 # Curses support
 
 import time, signal, sys, math, thread, argparse, imp, logging
+import socket, struct, threading
 
 from dronekit import connect, VehicleMode, LocationGlobal, LocationGlobalRelative
 from pymavlink import mavutil
 #from bluetooth import *
-from struct import *
 
 from periodicrun import periodicrun
 
@@ -25,7 +25,6 @@ class Controller(object):
         self.globPose = [0,0,0,0,0,0,0]
         self.homePose_xyz = [0,0,0]
         self.homeSet = False
-        self.stopProgram = False
 
         self.cfg = cfg
 
@@ -37,6 +36,12 @@ class Controller(object):
         logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
         self.vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
         logger.info('Connected to the vehice on %s', self.cfg['port'])
+
+    def positionReceiver(self):
+        print 'Position receiver thread started.'
+        while not self.stopProgram:
+            data, addr = self.udpsock.recvfrom(256) # buffer size is 1024 bytes
+            self.posDelta = [struct.unpack('d',data[32:40])[0]/1000, struct.unpack('d',data[40:48])[0]/1000, struct.unpack('d',data[48:56])[0]/1000]
 
     def arm_and_takeoff_nogps(self, aTargetAltitude):
         """
@@ -149,12 +154,20 @@ class Controller(object):
         print atts
 
     def run(self):
+
+        self.stopProgram = False
+        self.udpsock = socket.socket(socket.AF_INET, # Internet
+                             socket.SOCK_DGRAM) # UDP
+        self.udpsock.bind((self.cfg['UDP_IP'], self.cfg['UDP_PORT']))
+
         self.connectToVehicle()
 
+        self.poscapturethread = threading.Thread(target=self.positionReceiver)
         self.cthread = periodicrun(cfg['guidancePeriod'], self.guidance, accuracy=0.001)
         self.athread = periodicrun(cfg['actuatorPeriod'], self.actuator, accuracy=0.001)
-        #self.cthread.run_thread()
-        #self.athread.run_thread()
+        self.poscapturethread.start()
+        self.cthread.run_thread()
+        self.athread.run_thread()
 
         self.monitor()
 
@@ -167,12 +180,13 @@ class Controller(object):
 
 
     def join(self):
+        self.poscapturethread.join()
         self.athread.join()
         self.cthread.join()
 
     def guidance(self):
-        logger.debug('Actuator loop started.')
-        print 'VehicleMode: ', self.vehicle.mode
+        logger.debug('Guidance loop started.')
+        print 'Position: ', self.posDelta
         time.sleep(1)
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
@@ -181,14 +195,17 @@ class Controller(object):
         # Create a roll pitch angle from PID controller
         #self.pD = [delta_x, delta_y, delta_z]
         pD = self.posDelta
-        PID = self.cfg.PID
+        PID = {'P': 5, 'I': 0, 'D': 0}#self.cfg['PID']
 
-        roll_angle  = PID['P']*pD[0] + PID['I']*pD[0] + PID['D']*pD[0]
+
+        roll_angle  = -PID['P']*pD[0] + PID['I']*pD[0] + PID['D']*pD[0]
         pitch_angle = PID['P']*pD[1] + PID['I']*pD[1] + PID['D']*pD[1]
 
         # Non-linear cutoff
-        if roll_angle  > 5 roll_angle = 5
-        if pitch_angle > 5 roll_angle = 5
+        if roll_angle  > 5:
+            roll_angle = 5
+        if pitch_angle > 5:
+            roll_angle = 5
 
         # Use defaults for the others
         thrust = 0.5
@@ -235,25 +252,34 @@ class Controller(object):
             elif str(choice) == "t":
                 self.arm_and_takeoff_nogps(self.cfg['takeoff_altitude'])
 
+            elif str(choice) == "tl":
+                self.arm_and_takeoff_nogps(0.5)
+                self.setVehicleMode('LAND')
+
             elif str(choice) == "l":
                 self.setVehicleMode('LAND')
 
-            elif str(choice) == "w":
-                self.set_attitude(thrust = 0.7, duration=0.5)
+            elif str(choice) == "u":
+                self.set_attitude(yaw_rate = 10, duration=1)
+
+            elif str(choice) == "y":
+                self.set_attitude(yaw_rate = -10, duration=1)
+
+            elif str(choice) == "l":
+                self.set_attitude(thrust = 0.40, duration=1)
                 self.set_attitude(thrust = 0.5)
+
+            elif str(choice) == "w":
+                self.set_attitude(pitch_angle = -5, duration=0.5)
 
             elif str(choice) == "s":
-                self.set_attitude(thrust = 0.4, duration=1)
-                self.set_attitude(thrust = 0.5)
+                self.set_attitude(pitch_angle = 5, duration=0.5)
 
-            elif str(choice) == "y0":
-                self.set_attitude(yaw_rate = 0.1)
+            elif str(choice) == "a":
+                self.set_attitude(roll_angle = -5, duration=0.5)
 
-            elif str(choice) == "y1":
-                self.set_attitude(yaw_rate = 0.1, duration=1)
-
-            elif str(choice) == "y5":
-                self.set_attitude(yaw_rate = 0.1, duration=5)
+            elif str(choice) == "d":
+                self.set_attitude(roll_angle = 5, duration=0.5)
 
         self.stop()
 
