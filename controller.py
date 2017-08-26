@@ -15,6 +15,7 @@ from pymavlink import mavutil
 #from bluetooth import *
 
 from periodicrun import periodicrun
+import numpy as np
 
 class Controller(object):
 
@@ -29,7 +30,7 @@ class Controller(object):
         self.cfg = cfg
 
         self.speed = 0.01
-        self.targetPos = np.array([0,0,0]
+        self.targetPos = np.array([0,0,0])
         self.error = np.zeros((3,3))
 
     def connectToVehicle(self):
@@ -192,7 +193,7 @@ class Controller(object):
 
     def guidance(self):
         logger.debug('Guidance loop started.')
-        print 'Position: ', self.posDelta
+        print 'Position: ', self.globPose
         time.sleep(1)
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
@@ -203,40 +204,44 @@ class Controller(object):
         PID_z  = np.array(self.cfg['tuning']['PID_z'])
 
         gPos = self.globPose[:3]
-		theta = -globPose[5] #*np.pi/180	# yaw correction in radians
-		rotZ = np.array(
-						[[ np.cos(theta), -np.sin(theta), 0],
-						 [ np.sin(theta),  np.cos(theta), 0],
-						 [ 0            ,  0            , 1]]
-						)
+        theta = -self.globPose[5] #*np.pi/180    # yaw correction in radians
+        rotZ = np.array(
+                        [[ np.cos(theta), -np.sin(theta), 0],
+                         [ np.sin(theta),  np.cos(theta), 0],
+                         [ 0            ,  0            , 1]]
+                        )
 
-		# Calculate the 3D error vector with corrected rotation
-		p_e = rotZ.dot(self.targetPos - gPos)
+        # Calculate the 3D error vector with corrected rotation
+        p_e = rotZ.dot(self.targetPos - gPos)
 
-		# Update the error matrix
-		err = self.error
-		err = np.array(
-						[p_e[0], err[0,1]+p_e[0], err[0,0]-p_e[0]],
-						[p_e[1], err[1,1]+p_e[1], err[1,0]-p_e[1]],
-						[p_e[2], err[2,1]+p_e[2], err[2,0]-p_e[2]]
-		)
-		self.error = err
+        # Update the error matrix
+        err = self.error
+        err = np.array([
+                        [p_e[0], err[0,1]+p_e[0], err[0,0]-p_e[0]],
+                        [p_e[1], err[1,1]+p_e[1], err[1,0]-p_e[1]],
+                        [p_e[2], err[2,1]+p_e[2], err[2,0]-p_e[2]]
+        ])
+        self.error = err
 
-		# Generate and set the target angle for XY plane
-		angle = err[:2,:] * PID_xy
-		thrust_add = err[3,:] * PID_z
+        # Generate and set the target angle for XY plane
+        angle = err[:2,:].dot(PID_xy)
+        thrust_add = err[2,:].dot(PID_z)
 
         roll_angle  = -angle[0]
         pitch_angle = angle[1]
-		thrust = 0.5 + thrust_add
+        thrust = 0.5 + thrust_add
 
         # Non-linear cutoff for safety
-		if self.cfg['tuning']['NONLIN_SAFETY']:
-			if roll_angle  > self.cfg['tuning']['MAX_SAFE_ANGLE']:
-				roll_angle = self.cfg['tuning']['MAX_SAFE_ANGLE']
-			if pitch_angle > self.cfg['tuning']['MAX_SAFE_ANGLE']:
-				roll_angle = self.cfg['tuning']['MAX_SAFE_ANGLE']
-        
+        if self.cfg['tuning']['NONLIN_SAFETY']:
+            if roll_angle  > self.cfg['tuning']['MAX_SAFE_ANGLE']:
+                roll_angle = self.cfg['tuning']['MAX_SAFE_ANGLE']
+            if pitch_angle > self.cfg['tuning']['MAX_SAFE_ANGLE']:
+                roll_angle = self.cfg['tuning']['MAX_SAFE_ANGLE']
+            if roll_angle  < -self.cfg['tuning']['MAX_SAFE_ANGLE']:
+                roll_angle = -self.cfg['tuning']['MAX_SAFE_ANGLE']
+            if pitch_angle < -self.cfg['tuning']['MAX_SAFE_ANGLE']:
+                roll_angle = -self.cfg['tuning']['MAX_SAFE_ANGLE']
+
         # Use defaults for the others
         yaw_rate = 0.0
 
