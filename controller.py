@@ -28,9 +28,10 @@ class Controller(object):
         self.homeSet = False
 
         self.cfg = cfg
+        self.PID_xy = PID_xy = np.array(self.cfg['tuning']['PID_xy'])
 
         self.speed = 0.01
-        self.targetPos = np.array([0,0,0])
+        self.targetPos = np.array([0,0,2])
         self.error = np.zeros((3,3))
 
     def connectToVehicle(self):
@@ -42,13 +43,38 @@ class Controller(object):
         print 'Position receiver thread started.'
         while not self.stopProgram:
             data, addr = self.udpsock.recvfrom(256) # buffer size is 1024 bytes
-            self.globPose = [   struct.unpack('d',data[32:40])[0]/1000,
-                                struct.unpack('d',data[40:48])[0]/1000,
-                                struct.unpack('d',data[48:56])[0]/1000,
-                                struct.unpack('d',data[56:64])[0]/1000,
-                                struct.unpack('d',data[64:72])[0]/1000,
-                                struct.unpack('d',data[72:80])[0]/1000,
-                                ]
+            obj1 = data[8]
+            obj2 = data[83]
+
+            if obj1 == 'B':
+                self.globPose = np.array(
+                                   [struct.unpack('d',data[32:40])[0]/1000,
+                                    struct.unpack('d',data[40:48])[0]/1000,
+                                    struct.unpack('d',data[48:56])[0]/1000,
+                                    struct.unpack('d',data[56:64])[0],
+                                    struct.unpack('d',data[64:72])[0],
+                                    struct.unpack('d',data[72:80])[0]
+                                    ])
+                if obj2 != 0:
+                    self.targetPos = np.array(
+                                       [struct.unpack('d',data[107:115])[0]/1000,
+                                        struct.unpack('d',data[115:123])[0]/1000,
+                                        3
+                                        ])
+            elif obj2 == 'B':
+                self.globPose = np.array(
+                                   [struct.unpack('d',data[107:115])[0]/1000,
+                                    struct.unpack('d',data[115:123])[0]/1000,
+                                    struct.unpack('d',data[123:131])[0]/1000,
+                                    struct.unpack('d',data[131:139])[0],
+                                    struct.unpack('d',data[139:147])[0],
+                                    struct.unpack('d',data[147:155])[0]
+                                    ])
+                self.targetPos = np.array(
+                                   [struct.unpack('d',data[32:40])[0]/1000,
+                                    struct.unpack('d',data[40:48])[0]/1000,
+                                    3
+                                    ])
 
     def arm_and_takeoff_nogps(self, aTargetAltitude):
         """
@@ -193,18 +219,19 @@ class Controller(object):
 
     def guidance(self):
         logger.debug('Guidance loop started.')
-        print 'Position: ', self.globPose
+        print 'Glob Position: ', self.globPose
+        print 'Targey Position: ', self.targetPos
         time.sleep(1)
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
     def actuator(self):
 
         # Create a roll pitch angle from PID controller
-        PID_xy = np.array(self.cfg['tuning']['PID_xy'])
+        PID_xy = self.PID_xy #np.array(self.cfg['tuning']['PID_xy'])
         PID_z  = np.array(self.cfg['tuning']['PID_z'])
 
         gPos = self.globPose[:3]
-        theta = -self.globPose[5] #*np.pi/180    # yaw correction in radians
+        theta = -self.globPose[5]    # yaw correction in radians
         rotZ = np.array(
                         [[ np.cos(theta), -np.sin(theta), 0],
                          [ np.sin(theta),  np.cos(theta), 0],
@@ -217,9 +244,9 @@ class Controller(object):
         # Update the error matrix
         err = self.error
         err = np.array([
-                        [p_e[0], err[0,1]+p_e[0], err[0,0]-p_e[0]],
-                        [p_e[1], err[1,1]+p_e[1], err[1,0]-p_e[1]],
-                        [p_e[2], err[2,1]+p_e[2], err[2,0]-p_e[2]]
+                        [p_e[0], err[0,1]+p_e[0], p_e[0]-err[0,0]],
+                        [p_e[1], err[1,1]+p_e[1], p_e[1]-err[1,0]],
+                        [p_e[2], err[2,1]+p_e[2], p_e[2]-err[2,0]]
         ])
         self.error = err
 
@@ -227,8 +254,8 @@ class Controller(object):
         angle = err[:2,:].dot(PID_xy)
         thrust_add = err[2,:].dot(PID_z)
 
-        roll_angle  = -angle[0]
-        pitch_angle = angle[1]
+        roll_angle  = angle[0]
+        pitch_angle = -angle[1]
         thrust = 0.5 + thrust_add
 
         # Non-linear cutoff for safety
@@ -314,6 +341,27 @@ class Controller(object):
 
             elif str(choice) == "d":
                 self.set_attitude(roll_angle = 5, duration=0.5)
+
+            elif str(choice) == "2":
+                self.PID_xy[0] = self.PID_xy[0] + 0.5
+
+            elif str(choice) == "1":
+                if self.PID_xy[2] >= 1:
+                    self.PID_xy[0] = self.PID_xy[0] - 0.5
+
+            #elif str(choice) == "4":
+            #    self.PID_xy[1] = self.PID_xy[1] + 0.5
+#
+            #elif str(choice) == "3":
+            #    if self.PID_xy[2] >= 1:
+            #        self.PID_xy[1] = self.PID_xy[1] - 0.5
+
+            elif str(choice) == "6":
+                self.PID_xy[2] = self.PID_xy[2] + 0.5
+
+            elif str(choice) == "5":
+                if self.PID_xy[2] >= 1:
+                    self.PID_xy[2] = self.PID_xy[2] - 0.5
 
         self.stop()
 

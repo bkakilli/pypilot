@@ -1,8 +1,8 @@
 
 tuning = {
-	'PID_xy': [5,0,0],
-	'PID_z': [0,0,0],
-	'NONLIN_SAFETY': True,
+	'PID_xy': [4,0,2],
+	'PID_z': [0.1,0,0.1],
+	'NONLIN_SAFETY': False,
 	'MAX_SAFE_ANGLE': 5,
 }
 
