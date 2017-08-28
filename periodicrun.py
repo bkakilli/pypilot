@@ -82,8 +82,8 @@ class periodicrun:
             # Check if execution time exceeds period duration with %10 tolerance
             now = time.time()
             #print "now: ", now, ". self.lasttime: ", self.lasttime, ". diff: ", now-self.lasttime, "tol: ", self.tolerance
-            #if now-self.lasttime > self.tolerance:
-                #print "Warning: Execution time exceeds period duration"
+            if now-self.lasttime > self.tolerance:
+                print "Warning: Execution time exceeds period duration!"
             self.lasttime = now
 
     def join(self):

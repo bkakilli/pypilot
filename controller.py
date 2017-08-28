@@ -30,7 +30,9 @@ class Controller(object):
         self.cfg = cfg
         self.PID_xy = PID_xy = np.array(self.cfg['tuning']['PID_xy'])
 
-        self.speed = 0.01
+        self.velocity = np.array([0,0,0])
+        self.lasttime = time.time()
+        self.lastPos = np.array([0,0,0,0,0,0])
         self.targetPos = np.array([0,0,2])
         self.error = np.zeros((3,3))
 
@@ -61,6 +63,9 @@ class Controller(object):
                                         struct.unpack('d',data[115:123])[0]/1000,
                                         3
                                         ])
+                else:
+                    self.targetPos = np.array([0,0,2])
+
             elif obj2 == 'B':
                 self.globPose = np.array(
                                    [struct.unpack('d',data[107:115])[0]/1000,
@@ -220,18 +225,25 @@ class Controller(object):
     def guidance(self):
         logger.debug('Guidance loop started.')
         print 'Glob Position: ', self.globPose
-        print 'Targey Position: ', self.targetPos
-        time.sleep(1)
+        print 'Target Position: ', self.targetPos
+        print 'velocity: ', self.velocity
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
     def actuator(self):
+        currPos = self.globPose
+        currTime = time.time()
+        # Calculate the velocity
+        self.velocity = (currPos[:3] - self.lastPos[:3]) / (currTime - self.lasttime)
+
+        self.lasttime = currTime
+        self.lastPos = currPos
 
         # Create a roll pitch angle from PID controller
         PID_xy = self.PID_xy #np.array(self.cfg['tuning']['PID_xy'])
         PID_z  = np.array(self.cfg['tuning']['PID_z'])
 
-        gPos = self.globPose[:3]
-        theta = -self.globPose[5]    # yaw correction in radians
+        gPos = currPos[:3]
+        theta = -currPos[5]    # yaw correction in radians
         rotZ = np.array(
                         [[ np.cos(theta), -np.sin(theta), 0],
                          [ np.sin(theta),  np.cos(theta), 0],
@@ -239,7 +251,14 @@ class Controller(object):
                         )
 
         # Calculate the 3D error vector with corrected rotation
-        p_e = rotZ.dot(self.targetPos - gPos)
+        distToTarget = rotZ.dot(self.targetPos - gPos)
+
+        # Set the desired speed based on the predefined pattern
+        desiredVelocity = 1 / (1 + np.exp(-5*np.absolute(distToTarget)+5))
+        desiredVelocity = desiredVelocity * distToTarget / np.absolute(distToTarget)
+
+        p_e = desiredVelocity - self.velocity
+        p_e[2] = distToTarget[2]
 
         # Update the error matrix
         err = self.error
@@ -253,6 +272,30 @@ class Controller(object):
         # Generate and set the target angle for XY plane
         angle = err[:2,:].dot(PID_xy)
         thrust_add = err[2,:].dot(PID_z)
+
+        #gPos = currPos[:3]
+        #theta = -currPos[5]    # yaw correction in radians
+        #rotZ = np.array(
+        #                [[ np.cos(theta), -np.sin(theta), 0],
+        #                 [ np.sin(theta),  np.cos(theta), 0],
+        #                 [ 0            ,  0            , 1]]
+        #                )
+        #
+        ## Calculate the 3D error vector with corrected rotation
+        #p_e = rotZ.dot(self.targetPos - gPos)
+        #
+        ## Update the error matrix
+        #err = self.error
+        #err = np.array([
+        #                [p_e[0], err[0,1]+p_e[0], p_e[0]-err[0,0]],
+        #                [p_e[1], err[1,1]+p_e[1], p_e[1]-err[1,0]],
+        #                [p_e[2], err[2,1]+p_e[2], p_e[2]-err[2,0]]
+        #])
+        #self.error = err
+        #
+        ## Generate and set the target angle for XY plane
+        #angle = err[:2,:].dot(PID_xy)
+        #thrust_add = err[2,:].dot(PID_z)
 
         roll_angle  = angle[0]
         pitch_angle = -angle[1]
@@ -325,10 +368,6 @@ class Controller(object):
 
             elif str(choice) == "y":
                 self.set_attitude(yaw_rate = -10, duration=1)
-
-            elif str(choice) == "l":
-                self.set_attitude(thrust = 0.40, duration=1)
-                self.set_attitude(thrust = 0.5)
 
             elif str(choice) == "w":
                 self.set_attitude(pitch_angle = -5, duration=0.5)
