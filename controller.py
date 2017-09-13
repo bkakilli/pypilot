@@ -14,27 +14,32 @@ from dronekit import connect, VehicleMode, LocationGlobal, LocationGlobalRelativ
 from pymavlink import mavutil
 #from bluetooth import *
 
-from periodicrun import periodicrun
 import numpy as np
+
+from modules.periodicrun import periodicrun
+from modules.actuator import SimpleVelocityController as Actuator
+from modules.mission import Mission
+from modules.mission import Task
 
 class Controller(object):
 
     def __init__(self, cfg):
 
-        self.vehicle = None
         self.stopProgram = False
-        self.globPose = np.array([0,0,0,0,0,0])
-        self.homePose = np.array([0,0,0,0,0,0])
-        self.homeSet = False
-
         self.cfg = cfg
-        self.PID_xy = PID_xy = np.array(self.cfg['tuning']['PID_xy'])
 
-        self.velocity = np.array([0,0,0])
-        self.lasttime = time.time()
-        self.lastPos = np.array([0,0,0,0,0,0])
-        self.targetPos = np.array([0,0,2])
-        self.error = np.zeros((3,3))
+        self.vehicle = None
+        self.globPose = [0,0,0,0,0,0]
+        self.homePose = [0,0,0,0,0,0]
+        self.homeSet = False
+        self.mission = None
+
+        self.actuator = None
+        self.actuatorTarget = [0,0,2]
+
+        self.followObjPos = [0,0,0]
+
+        self.armingInProgress = False
 
     def connectToVehicle(self):
         logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
@@ -49,123 +54,56 @@ class Controller(object):
             obj2 = data[83]
 
             if obj1 == 'B':
-                self.globPose = np.array(
-                                   [struct.unpack('d',data[32:40])[0]/1000,
+                self.globPose =    [struct.unpack('d',data[32:40])[0]/1000,
                                     struct.unpack('d',data[40:48])[0]/1000,
                                     struct.unpack('d',data[48:56])[0]/1000,
                                     struct.unpack('d',data[56:64])[0],
                                     struct.unpack('d',data[64:72])[0],
-                                    struct.unpack('d',data[72:80])[0]
-                                    ])
+                                    struct.unpack('d',data[72:80])[0]]
                 if obj2 != 0:
-                    self.targetPos = np.array(
-                                       [struct.unpack('d',data[107:115])[0]/1000,
-                                        struct.unpack('d',data[115:123])[0]/1000,
-                                        3
-                                        ])
+                    self.followObjPos = [struct.unpack('d',data[107:115])[0]/1000,
+                                         struct.unpack('d',data[115:123])[0]/1000,
+                                         3]
                 else:
-                    self.targetPos = np.array([0,0,2])
+                    self.followObjPos = [0,0,2]
 
             elif obj2 == 'B':
-                self.globPose = np.array(
-                                   [struct.unpack('d',data[107:115])[0]/1000,
+                self.globPose =    [struct.unpack('d',data[107:115])[0]/1000,
                                     struct.unpack('d',data[115:123])[0]/1000,
                                     struct.unpack('d',data[123:131])[0]/1000,
                                     struct.unpack('d',data[131:139])[0],
                                     struct.unpack('d',data[139:147])[0],
                                     struct.unpack('d',data[147:155])[0]
-                                    ])
-                self.targetPos = np.array(
-                                   [struct.unpack('d',data[32:40])[0]/1000,
-                                    struct.unpack('d',data[40:48])[0]/1000,
-                                    3
-                                    ])
+                                    ]
+                self.followObjPos = [struct.unpack('d',data[32:40])[0]/1000,
+                                     struct.unpack('d',data[40:48])[0]/1000,
+                                     3]
 
-    def arm_and_takeoff_nogps(self, aTargetAltitude):
+    def arm_vehicle(self):
         """
-        Arms vehicle and fly to aTargetAltitude without GPS data.
+        Arms vehicle
         """
+        self.armingInProgress = True
 
-        ##### CONSTANTS #####
-        DEFAULT_TAKEOFF_THRUST = 0.7
-        SMOOTH_TAKEOFF_THRUST = 0.6
+        logger.debug("Check if armed for take-off.")
+        if not self.vehicle.armed:
 
-        logger.info("Switch to STABILIZE mode fore arming.")
-        while not self.vehicle.mode == "STABILIZE":
-            self.vehicle.mode = VehicleMode("STABILIZE")
-            time.sleep(1)
+            logger.info("Switching to STABILIZE mode before arming.")
+            while not self.vehicle.mode == "STABILIZE":
+                self.vehicle.mode = VehicleMode("STABILIZE")
+                time.sleep(1)
+            logger.info( "Waiting for arming...")
+            while not self.vehicle.armed:
+                self.vehicle.armed = True
+                time.sleep(1)
 
-        #logger.info("Basic pre-arm checks")
-        # Don't let the user try to arm until autopilot is ready
-        # If you need to disable the arming check, just comment it with your own responsibility.
-        #while not self.vehicle.is_armable:
-        #    logger.info(" Waiting for vehicle to initialise...")
-        #    time.sleep(1)
-
-
-        logger.info( "Arming motors")
-        while not self.vehicle.armed:
-            logger.info( " Waiting for arming...")
-            self.vehicle.armed = True
-            time.sleep(1)
-
+        logger.info("Switching to GUIDED_NOGPS mode.")
         while not self.vehicle.mode == "GUIDED_NOGPS":
             self.vehicle.mode = VehicleMode("GUIDED_NOGPS")
             time.sleep(1)
 
-        logger.info( "Taking off!")
-        thrust = DEFAULT_TAKEOFF_THRUST
-        while True:
-            current_altitude = self.vehicle.location.global_relative_frame.alt
-            logger.info( " Altitude: %f", current_altitude)
-            if current_altitude >= aTargetAltitude*0.95: # Trigger just below target alt.
-                logger.info( "Reached target altitude")
-                break
-            elif current_altitude >= aTargetAltitude*0.6:
-                thrust = SMOOTH_TAKEOFF_THRUST
-            self.set_attitude(thrust = thrust)
-            time.sleep(0.2)
+        self.armingInProgress = False
 
-
-    def set_attitude(self, roll_angle = 0.0, pitch_angle = 0.0, yaw_rate = 0.0, thrust = 0.5, duration = 0):
-        """
-        Note that from AC3.3 the message should be re-sent every second (after about 3 seconds
-        with no message the velocity will drop back to zero). In AC3.2.1 and earlier the specified
-        velocity persists until it is canceled. The code below should work on either version
-        (sending the message multiple times does not cause problems).
-        """
-
-        """
-        The roll and pitch rate cannot be controllbed with rate in radian in AC3.4.4 or earlier,
-        so you must use quaternion to control the pitch and roll for those vehicles.
-        """
-
-        # Thrust >  0.5: Ascend
-        # Thrust == 0.5: Hold the altitude
-        # Thrust <  0.5: Descend
-        msg = self.vehicle.message_factory.set_attitude_target_encode(
-                     0,
-                     0,                                         #target system
-                     0,                                         #target component
-                     0b00000000,                                #type mask: bit 1 is LSB
-                     self.to_quaternion(roll_angle, pitch_angle),    #q
-                     0,                                         #body roll rate in radian
-                     0,                                         #body pitch rate in radian
-                     math.radians(yaw_rate),                    #body yaw rate in radian
-                     thrust)                                    #thrust
-        self.vehicle.send_mavlink(msg)
-
-        if duration != 0:
-            # Divide the duration into the frational and integer parts
-            modf = math.modf(duration)
-
-            # Sleep for the fractional part
-            time.sleep(modf[0])
-
-            # Send command to vehicle on 1 Hz cycle
-            for x in range(0,int(modf[1])):
-                time.sleep(1)
-                self.vehicle.send_mavlink(msg)
 
     def to_quaternion(self, roll = 0.0, pitch = 0.0, yaw = 0.0):
         """
@@ -185,11 +123,11 @@ class Controller(object):
 
         return [w, x, y, z]
 
+    def distance(self, a, b):
+        return np.linalg.norm(np.array(a)-np.array(b))
+
     def setVehicleMode(self, mode):
         self.vehicle.mode = VehicleMode(mode)
-
-    def send_attitude(self, att):
-        print atts
 
     def run(self):
 
@@ -200,10 +138,12 @@ class Controller(object):
 
         self.connectToVehicle()
 
+        self.actuator = Actuator(cfg['tuning']['PID_xy'], cfg['tuning']['PID_z'])
+
         self.poscapturethread = threading.Thread(target=self.positionReceiver)
-        self.cthread = periodicrun(cfg['guidancePeriod'], self.guidance, accuracy=0.001)
-        self.athread = periodicrun(cfg['actuatorPeriod'], self.actuator, accuracy=0.001)
-        self.poscapturethread.start()
+        self.cthread = periodicrun(cfg['guidancePeriod'], self.guidanceLoop, accuracy=0.001)
+        self.athread = periodicrun(cfg['actuatorPeriod'], self.actuatorLoop, accuracy=0.001)
+        #self.poscapturethread.start()
         self.cthread.run_thread()
         self.athread.run_thread()
 
@@ -211,95 +151,88 @@ class Controller(object):
 
     def stop(self):
         logger.debug('Controller shut down.')
-        self.vehicle.close()
         self.stopProgram = True
         self.athread.interrupt()
         self.cthread.interrupt()
+        self.vehicle.close()
 
 
     def join(self):
-        self.poscapturethread.join()
+        #self.poscapturethread.join()
         self.athread.join()
         self.cthread.join()
 
-    def guidance(self):
-        logger.debug('Guidance loop started.')
-        print 'Glob Position: ', self.globPose
-        print 'Target Position: ', self.targetPos
-        print 'velocity: ', self.velocity
+    def guidanceLoop(self):
+
+        if self.mission:
+            globPose = self.globPose
+            task = self.mission.tasks[0]
+
+            if   task.type == Task.TYPE.TAKEOFF:
+                if not task.active:
+                    task.start()
+                if not self.armingInProgress:
+                    self.arm_vehicle()
+                    self.actuatorTarget = [globPose[0], globPose[1], task.target[2]]
+
+                # Check completed
+                if self.distance(globPose[:3], task.target) < 0.1: #TARGETREACHPRECISION
+                    self.mission.remove(0)
+
+            elif task.type == Task.TYPE.LAND:
+                if not task.active:
+                    task.start()
+                setVehicleMode('LAND')
+
+                # Check completed
+                if self.vehicle.mode == 'LAND':
+                    self.mission.remove(0)
+
+            elif task.type == Task.TYPE.HOVER:
+                if not task.active:
+                    task.start(target=self.mission.previousTarget[:3])
+                self.actuatorTarget = task.target
+
+                # Check completed
+                if task.istimeout():
+                    self.mission.remove(0)
+
+            elif task.type == Task.TYPE.MOVETO:
+                if not task.active:
+                    if task.relative:
+                        prevTarget = self.mission.previousTarget
+                        task.target =   [prevTarget[0]+task.target[0],
+                                         prevTarget[1]+task.target[1],
+                                         prevTarget[2]+task.target[2]]
+
+                    task.start()
+                self.actuatorTarget = task.target
+
+                # Check completed
+                if self.distance(globPose[:3], task.target) < 0.1: #TARGETREACHPRECISION
+                    self.mission.remove(0)
+
+            elif task.type == Task.TYPE.FOLLOW:
+                if not task.active:
+                    task.start()
+                task.target = self.followObjPos
+                self.actuatorTarget = task.target
+
+                # Check completed
+                if task.istimeout():
+                    self.mission.remove(0)
+
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
-    def actuator(self):
-        currPos = self.globPose
-        currTime = time.time()
-        # Calculate the velocity
-        self.velocity = (currPos[:3] - self.lastPos[:3]) / (currTime - self.lasttime)
+    def actuatorLoop(self):
 
-        self.lasttime = currTime
-        self.lastPos = currPos
+        # Get current control values
+        c = self.actuator.step(self.globPose, self.actuatorTarget)
 
-        # Create a roll pitch angle from PID controller
-        PID_xy = self.PID_xy #np.array(self.cfg['tuning']['PID_xy'])
-        PID_z  = np.array(self.cfg['tuning']['PID_z'])
-
-        gPos = currPos[:3]
-        theta = -currPos[5]    # yaw correction in radians
-        rotZ = np.array(
-                        [[ np.cos(theta), -np.sin(theta), 0],
-                         [ np.sin(theta),  np.cos(theta), 0],
-                         [ 0            ,  0            , 1]]
-                        )
-
-        # Calculate the 3D error vector with corrected rotation
-        distToTarget = rotZ.dot(self.targetPos - gPos)
-
-        # Set the desired speed based on the predefined pattern
-        desiredVelocity = 1 / (1 + np.exp(-5*np.absolute(distToTarget)+5))
-        desiredVelocity = desiredVelocity * distToTarget / np.absolute(distToTarget)
-
-        p_e = desiredVelocity - self.velocity
-        p_e[2] = distToTarget[2]
-
-        # Update the error matrix
-        err = self.error
-        err = np.array([
-                        [p_e[0], err[0,1]+p_e[0], p_e[0]-err[0,0]],
-                        [p_e[1], err[1,1]+p_e[1], p_e[1]-err[1,0]],
-                        [p_e[2], err[2,1]+p_e[2], p_e[2]-err[2,0]]
-        ])
-        self.error = err
-
-        # Generate and set the target angle for XY plane
-        angle = err[:2,:].dot(PID_xy)
-        thrust_add = err[2,:].dot(PID_z)
-
-        #gPos = currPos[:3]
-        #theta = -currPos[5]    # yaw correction in radians
-        #rotZ = np.array(
-        #                [[ np.cos(theta), -np.sin(theta), 0],
-        #                 [ np.sin(theta),  np.cos(theta), 0],
-        #                 [ 0            ,  0            , 1]]
-        #                )
-        #
-        ## Calculate the 3D error vector with corrected rotation
-        #p_e = rotZ.dot(self.targetPos - gPos)
-        #
-        ## Update the error matrix
-        #err = self.error
-        #err = np.array([
-        #                [p_e[0], err[0,1]+p_e[0], p_e[0]-err[0,0]],
-        #                [p_e[1], err[1,1]+p_e[1], p_e[1]-err[1,0]],
-        #                [p_e[2], err[2,1]+p_e[2], p_e[2]-err[2,0]]
-        #])
-        #self.error = err
-        #
-        ## Generate and set the target angle for XY plane
-        #angle = err[:2,:].dot(PID_xy)
-        #thrust_add = err[2,:].dot(PID_z)
-
-        roll_angle  = angle[0]
-        pitch_angle = -angle[1]
-        thrust = 0.5 + thrust_add
+        roll_angle  = c['roll_angle']
+        pitch_angle = c['pitch_angle']
+        thrust = c['thrust']
+        yaw_rate = c['yaw_rate']
 
         # Non-linear cutoff for safety
         if self.cfg['tuning']['NONLIN_SAFETY']:
@@ -311,9 +244,6 @@ class Controller(object):
                 roll_angle = -self.cfg['tuning']['MAX_SAFE_ANGLE']
             if pitch_angle < -self.cfg['tuning']['MAX_SAFE_ANGLE']:
                 roll_angle = -self.cfg['tuning']['MAX_SAFE_ANGLE']
-
-        # Use defaults for the others
-        yaw_rate = 0.0
 
         msg = self.vehicle.message_factory.set_attitude_target_encode(
                      0,
@@ -328,19 +258,6 @@ class Controller(object):
         self.vehicle.send_mavlink(msg)
 
 
-    #manual = {
-    #0: send_attitude,
-    #1: setVehicleMode,
-    #2: arm_and_takeoff_nogps
-    #}
-    #
-    #def manualCommand(self, comm):
-    #    print 'Received command: ', comm;
-    #    if 'val' in comm:
-    #        self.manual[comm['type']](comm['val'])
-    #    else:
-    #        self.manual[comm['type']]
-
     def monitor(self):
         while True:
             choice = raw_input("Make your choice: ")
@@ -353,59 +270,31 @@ class Controller(object):
             elif str(choice) == "m":
                 self.setVehicleMode('STABILIZE')
 
-            elif str(choice) == "t":
-                self.arm_and_takeoff_nogps(self.cfg['takeoff_altitude'])
+            elif str(choice) == "mi":
+                mission = Mission()
 
-            elif str(choice) == "tl":
-                self.arm_and_takeoff_nogps(0.5)
-                self.setVehicleMode('LAND')
+                task = Task(Task.TYPE.TAKEOFF)
+                task.target = [0,0,2]
+                mission.appendTask(task)
 
-            elif str(choice) == "l":
-                self.setVehicleMode('LAND')
+                task = Task(Task.TYPE.HOVER)
+                task.duration = 3
+                mission.appendTask(task)
 
-            elif str(choice) == "u":
-                self.set_attitude(yaw_rate = 10, duration=1)
+                task = Task(Task.TYPE.LAND)
+                mission.appendTask(task)
 
-            elif str(choice) == "y":
-                self.set_attitude(yaw_rate = -10, duration=1)
+                self.mission = mission
 
-            elif str(choice) == "w":
-                self.set_attitude(pitch_angle = -5, duration=0.5)
-
-            elif str(choice) == "s":
-                self.set_attitude(pitch_angle = 5, duration=0.5)
-
-            elif str(choice) == "a":
-                self.set_attitude(roll_angle = -5, duration=0.5)
-
-            elif str(choice) == "d":
-                self.set_attitude(roll_angle = 5, duration=0.5)
-
-            elif str(choice) == "2":
-                self.PID_xy[0] = self.PID_xy[0] + 0.5
-
-            elif str(choice) == "1":
-                if self.PID_xy[2] >= 1:
-                    self.PID_xy[0] = self.PID_xy[0] - 0.5
-
-            #elif str(choice) == "4":
-            #    self.PID_xy[1] = self.PID_xy[1] + 0.5
-#
-            #elif str(choice) == "3":
-            #    if self.PID_xy[2] >= 1:
-            #        self.PID_xy[1] = self.PID_xy[1] - 0.5
-
-            elif str(choice) == "6":
-                self.PID_xy[2] = self.PID_xy[2] + 0.5
-
-            elif str(choice) == "5":
-                if self.PID_xy[2] >= 1:
-                    self.PID_xy[2] = self.PID_xy[2] - 0.5
+            elif str(choice) == "gp":
+                self.globPose = [0,0,1.99,0,0,0]
 
         self.stop()
 
 #######################  Main Program  ##########################
 
+def test(cfg):
+    pass
 
 if __name__ == '__main__':
 
@@ -434,6 +323,7 @@ if __name__ == '__main__':
         logger.debug('Verbose level is set 2. Everything will be displayed as much as possible.')
         print 'test'
 
+    #test(cfg)
     controller = Controller(cfg)
     controller.run()
     controller.join()
