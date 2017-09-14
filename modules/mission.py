@@ -50,23 +50,6 @@ class Mission:
     previousTarget = [0,0,0]
 
     def appendTask(self, t):
-        task = Task(t)
-        '''
-        if   t == Task.TYPE.TAKEOFF:
-            task.target = params['TakeoffTarget']
-        elif t == Task.TYPE.LAND:
-            pass
-        elif t == Task.TYPE.HOVER:
-            task.target = params['HoverTarget']
-            task.duration = params['HoverDuration']
-            task.starttime = time.time()
-        elif t == Task.TYPE.MOVETO:
-            task.target = params['TargetPosition']
-        elif t == Task.TYPE.FOLLOW:
-            task.duration = params['FollowDuration']
-            task.starttime = time.time()
-        '''
-
         self.tasks.append(t)
 
     def remove(self, i):

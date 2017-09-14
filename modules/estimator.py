@@ -9,10 +9,23 @@ class EstimatorBase:
         raise NotImplementedError
 
     def join(self):
-        NotImplementedError
+        raise NotImplementedError
 
-    def getPoses(self):
-        NotImplementedError
+    def getPoses(self, i):
+        raise NotImplementedError
+
+class TangoPoseEstimator(EstimatorBase):
+    def getPoses(self, i):
+        raise NotImplementedError
+
+    def stop(self):
+        raise NotImplementedError
+
+    def join(self):
+        raise NotImplementedError
+
+    def getPoses(self, i):
+        raise NotImplementedError
 
 class ViconTrackerEstimator(EstimatorBase):
 

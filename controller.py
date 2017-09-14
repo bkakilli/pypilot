@@ -7,11 +7,9 @@
 # Thread based manual command system
 # Curses support
 
-import time, signal, sys, math, thread, argparse, imp, logging
-import struct, threading
+import time, math, argparse, imp, logging
 
-from dronekit import connect, VehicleMode, LocationGlobal, LocationGlobalRelative
-from pymavlink import mavutil
+from dronekit import connect, VehicleMode
 
 from modules.periodicrun import periodicrun
 from modules.estimator import ViconTrackerEstimator as Estimator
@@ -23,18 +21,16 @@ class Controller(object):
 
     def __init__(self, cfg):
 
-        self.stopProgram = False
         self.cfg = cfg
 
         self.vehicle = None
         self.homePose = [0,0,0,0,0,0]
-        self.homeSet = False
+        self.vehiclePose = [0,0,0,0,0,0]
         self.mission = None
 
         self.actuator = None
         self.estimator = None
         self.actuatorTarget = [0,0,2]
-
         self.followObjPos = [0,0,0]
 
         self.armingInProgress = False
@@ -43,41 +39,6 @@ class Controller(object):
         logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
         self.vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
         logger.info('Connected to the vehice on %s', self.cfg['port'])
-
-    '''
-    def positionReceiver(self):
-        print 'Position receiver thread started.'
-        while not self.stopProgram:
-            data, addr = self.udpsock.recvfrom(256) # buffer size is 1024 bytes
-            obj1 = data[8]
-            obj2 = data[83]
-
-            if obj1 == 'B':
-                self.globPose =    [struct.unpack('d',data[32:40])[0]/1000,
-                                    struct.unpack('d',data[40:48])[0]/1000,
-                                    struct.unpack('d',data[48:56])[0]/1000,
-                                    struct.unpack('d',data[56:64])[0],
-                                    struct.unpack('d',data[64:72])[0],
-                                    struct.unpack('d',data[72:80])[0]]
-                if obj2 != 0:
-                    self.followObjPos = [struct.unpack('d',data[107:115])[0]/1000,
-                                         struct.unpack('d',data[115:123])[0]/1000,
-                                         3]
-                else:
-                    self.followObjPos = [0,0,2]
-
-            elif obj2 == 'B':
-                self.globPose =    [struct.unpack('d',data[107:115])[0]/1000,
-                                    struct.unpack('d',data[115:123])[0]/1000,
-                                    struct.unpack('d',data[123:131])[0]/1000,
-                                    struct.unpack('d',data[131:139])[0],
-                                    struct.unpack('d',data[139:147])[0],
-                                    struct.unpack('d',data[147:155])[0]
-                                    ]
-                self.followObjPos = [struct.unpack('d',data[32:40])[0]/1000,
-                                     struct.unpack('d',data[40:48])[0]/1000,
-                                     3]
-    '''
 
     def arm_vehicle(self):
         """
@@ -104,71 +65,16 @@ class Controller(object):
 
         self.armingInProgress = False
 
-
-    def to_quaternion(self, roll = 0.0, pitch = 0.0, yaw = 0.0):
-        """
-        Convert degrees to quaternions
-        """
-        t0 = math.cos(math.radians(yaw * 0.5))
-        t1 = math.sin(math.radians(yaw * 0.5))
-        t2 = math.cos(math.radians(roll * 0.5))
-        t3 = math.sin(math.radians(roll * 0.5))
-        t4 = math.cos(math.radians(pitch * 0.5))
-        t5 = math.sin(math.radians(pitch * 0.5))
-
-        w = t0 * t2 * t4 + t1 * t3 * t5
-        x = t0 * t3 * t4 - t1 * t2 * t5
-        y = t0 * t2 * t5 + t1 * t3 * t4
-        z = t1 * t2 * t4 - t0 * t3 * t5
-
-        return [w, x, y, z]
-
     def distance(self, a, b):
         return math.sqrt((a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2)
 
     def setVehicleMode(self, mode):
         self.vehicle.mode = VehicleMode(mode)
 
-    def run(self):
-
-        cfg = self.cfg
-
-        self.stopProgram = False
-        #self.udpsock = socket.socket(socket.AF_INET, # Internet
-        #                     socket.SOCK_DGRAM) # UDP
-        #self.udpsock.bind((self.cfg['UDP_IP'], self.cfg['UDP_PORT']))
-
-        self.connectToVehicle()
-        self.actuator = Actuator(cfg['tuning']['PID_xy'], cfg['tuning']['PID_z'])
-        self.estimator = Estimator(cfg['UDP_IP'], cfg['UDP_PORT'], cfg['VICON_DRONENAME'])
-        self.estimator.run()
-
-        self.poscapturethread = threading.Thread(target=self.positionReceiver)
-        self.cthread = periodicrun(cfg['guidancePeriod'], self.guidanceLoop, accuracy=0.001)
-        self.athread = periodicrun(cfg['actuatorPeriod'], self.actuatorLoop, accuracy=0.001)
-        self.poscapturethread.start()
-        self.cthread.run_thread()
-        self.athread.run_thread()
-
-        self.monitor()
-
-    def stop(self):
-        logger.debug('Controller shut down.')
-        self.stopProgram = True
-        self.athread.interrupt()
-        self.cthread.interrupt()
-        self.vehicle.close()
-
-
-    def join(self):
-        self.poscapturethread.join()
-        self.athread.join()
-        self.cthread.join()
-
     def guidanceLoop(self):
 
         if self.mission:
-            globPose = estimator.getPoses(0)
+            globPose = self.vehiclePose
             task = self.mission.tasks[0]
 
             if   task.type == Task.TYPE.TAKEOFF:
@@ -176,7 +82,7 @@ class Controller(object):
                     task.start()
                 if not self.armingInProgress:
                     self.arm_vehicle()
-                    self.actuatorTarget = [globPose[0], globPose[1], task.target[2]]
+                    task.target = [globPose[0], globPose[1], task.target[2]]
 
                 # Check completed
                 if self.distance(globPose[:3], task.target) < 0.1: #TARGETREACHPRECISION
@@ -194,7 +100,6 @@ class Controller(object):
             elif task.type == Task.TYPE.HOVER:
                 if not task.active:
                     task.start(target=self.mission.previousTarget[:3])
-                self.actuatorTarget = task.target
 
                 # Check completed
                 if task.istimeout():
@@ -209,7 +114,6 @@ class Controller(object):
                                          prevTarget[2]+task.target[2]]
 
                     task.start()
-                self.actuatorTarget = task.target
 
                 # Check completed
                 if self.distance(globPose[:3], task.target) < 0.1: #TARGETREACHPRECISION
@@ -218,47 +122,33 @@ class Controller(object):
             elif task.type == Task.TYPE.FOLLOW:
                 if not task.active:
                     task.start()
-                task.target = self.followObjPos
-                self.actuatorTarget = task.target
+                if self.followObjPos == -1
+                    # task.target = self.vehiclePose[:3]
+                    pass # goes to last observed position then hovers
+                else:
+                    task.target = self.followObjPos
 
                 # Check completed
                 if task.istimeout():
                     self.mission.remove(0)
 
+            # Set actuatorTarget
+            self.actuatorTarget = task.target
+
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
     def actuatorLoop(self):
+        # Step actuator loop
+        self.actuator.step(self.vehiclePose, self.actuatorTarget)
 
-        # Get current control values
-        c = self.actuator.step(estimator.getPoses(0), self.actuatorTarget)
 
-        roll_angle  = c['roll_angle']
-        pitch_angle = c['pitch_angle']
-        thrust = c['thrust']
-        yaw_rate = c['yaw_rate']
-
-        # Non-linear cutoff for safety
-        if self.cfg['tuning']['NONLIN_SAFETY']:
-            if roll_angle  > self.cfg['tuning']['MAX_SAFE_ANGLE']:
-                roll_angle = self.cfg['tuning']['MAX_SAFE_ANGLE']
-            if pitch_angle > self.cfg['tuning']['MAX_SAFE_ANGLE']:
-                roll_angle = self.cfg['tuning']['MAX_SAFE_ANGLE']
-            if roll_angle  < -self.cfg['tuning']['MAX_SAFE_ANGLE']:
-                roll_angle = -self.cfg['tuning']['MAX_SAFE_ANGLE']
-            if pitch_angle < -self.cfg['tuning']['MAX_SAFE_ANGLE']:
-                roll_angle = -self.cfg['tuning']['MAX_SAFE_ANGLE']
-
-        msg = self.vehicle.message_factory.set_attitude_target_encode(
-                     0,
-                     0,                                         #target system
-                     0,                                         #target component
-                     0b00000000,                                #type mask: bit 1 is LSB
-                     self.to_quaternion(roll_angle, pitch_angle),    #q
-                     0,                                         #body roll rate in radian
-                     0,                                         #body pitch rate in radian
-                     math.radians(yaw_rate),                    #body yaw rate in radian
-                     thrust)                                    #thrust
-        self.vehicle.send_mavlink(msg)
+    def estimatorLoop(self):
+        poses = self.estimator.getPoses()
+        self.vehiclePose = poses[0]
+        if poses[1]:
+            self.followObjPos = poses[1][:3]
+        else:
+            self.followObjPos = -1
 
 
     def monitor(self):
@@ -290,6 +180,50 @@ class Controller(object):
                 self.mission = mission
 
         self.stop()
+
+    def run(self):
+
+        cfg = self.cfg
+
+        #self.udpsock = socket.socket(socket.AF_INET, # Internet
+        #                     socket.SOCK_DGRAM) # UDP
+        #self.udpsock.bind((self.cfg['UDP_IP'], self.cfg['UDP_PORT']))
+                #self.poscapturethread = threading.Thread(target=self.positionReceiver)
+
+        # Create guidance, estimator, and actuator loops
+        self.cthread = periodicrun(cfg['guidancePeriod'],  self.guidanceLoop,  accuracy=0.001)
+        self.athread = periodicrun(cfg['actuatorPeriod'],  self.actuatorLoop,  accuracy=0.001)
+        self.pthread = periodicrun(cfg['estimatorPeriod'], self.estimatorLoop, accuracy=0.001)
+
+        # Crete actuator and estimator
+        self.actuator = Actuator(vehicle, cfg)
+        self.estimator = Estimator(cfg['UDP_IP'], cfg['UDP_PORT'], cfg['VICON_DRONENAME'])
+
+        # Start running the estimator and connect to the vehicle
+        self.estimator.run()
+        self.connectToVehicle()
+
+        # Start machines
+        #self.poscapturethread.start()
+        self.pthread.run_thread()
+        self.cthread.run_thread()
+        self.athread.run_thread()
+
+        self.monitor()
+
+    def stop(self):
+        logger.debug('Controller shut down.')
+        self.athread.interrupt()
+        self.cthread.interrupt()
+        self.pthread.interrupt()
+        self.vehicle.close()
+
+
+    def join(self):
+        #self.poscapturethread.join()
+        self.athread.join()
+        self.cthread.join()
+        self.pthread.join()
 
 #######################  Main Program  ##########################
 

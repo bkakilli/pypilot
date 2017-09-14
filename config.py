@@ -15,6 +15,7 @@ cfg = {
     'wait_ready' : False,
     'actuatorPeriod': 0.1,
     'guidancePeriod': 0.1,
+    'estimatorPeriod': 0.02,
     'takeoff_altitude': 0.5,
     'verbose': 1,   # 0,1,2
 	'tuning': tuning,
