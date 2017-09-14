@@ -8,15 +8,13 @@
 # Curses support
 
 import time, signal, sys, math, thread, argparse, imp, logging
-import socket, struct, threading
+import struct, threading
 
 from dronekit import connect, VehicleMode, LocationGlobal, LocationGlobalRelative
 from pymavlink import mavutil
-#from bluetooth import *
-
-import numpy as np
 
 from modules.periodicrun import periodicrun
+from modules.estimator import ViconTrackerEstimator as Estimator
 from modules.actuator import SimpleVelocityController as Actuator
 from modules.mission import Mission
 from modules.mission import Task
@@ -29,12 +27,12 @@ class Controller(object):
         self.cfg = cfg
 
         self.vehicle = None
-        self.globPose = [0,0,0,0,0,0]
         self.homePose = [0,0,0,0,0,0]
         self.homeSet = False
         self.mission = None
 
         self.actuator = None
+        self.estimator = None
         self.actuatorTarget = [0,0,2]
 
         self.followObjPos = [0,0,0]
@@ -46,6 +44,7 @@ class Controller(object):
         self.vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
         logger.info('Connected to the vehice on %s', self.cfg['port'])
 
+    '''
     def positionReceiver(self):
         print 'Position receiver thread started.'
         while not self.stopProgram:
@@ -78,6 +77,7 @@ class Controller(object):
                 self.followObjPos = [struct.unpack('d',data[32:40])[0]/1000,
                                      struct.unpack('d',data[40:48])[0]/1000,
                                      3]
+    '''
 
     def arm_vehicle(self):
         """
@@ -124,26 +124,29 @@ class Controller(object):
         return [w, x, y, z]
 
     def distance(self, a, b):
-        return np.linalg.norm(np.array(a)-np.array(b))
+        return math.sqrt((a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2)
 
     def setVehicleMode(self, mode):
         self.vehicle.mode = VehicleMode(mode)
 
     def run(self):
 
+        cfg = self.cfg
+
         self.stopProgram = False
-        self.udpsock = socket.socket(socket.AF_INET, # Internet
-                             socket.SOCK_DGRAM) # UDP
-        self.udpsock.bind((self.cfg['UDP_IP'], self.cfg['UDP_PORT']))
+        #self.udpsock = socket.socket(socket.AF_INET, # Internet
+        #                     socket.SOCK_DGRAM) # UDP
+        #self.udpsock.bind((self.cfg['UDP_IP'], self.cfg['UDP_PORT']))
 
         self.connectToVehicle()
-
         self.actuator = Actuator(cfg['tuning']['PID_xy'], cfg['tuning']['PID_z'])
+        self.estimator = Estimator(cfg['UDP_IP'], cfg['UDP_PORT'], cfg['VICON_DRONENAME'])
+        self.estimator.run()
 
         self.poscapturethread = threading.Thread(target=self.positionReceiver)
         self.cthread = periodicrun(cfg['guidancePeriod'], self.guidanceLoop, accuracy=0.001)
         self.athread = periodicrun(cfg['actuatorPeriod'], self.actuatorLoop, accuracy=0.001)
-        #self.poscapturethread.start()
+        self.poscapturethread.start()
         self.cthread.run_thread()
         self.athread.run_thread()
 
@@ -158,14 +161,14 @@ class Controller(object):
 
 
     def join(self):
-        #self.poscapturethread.join()
+        self.poscapturethread.join()
         self.athread.join()
         self.cthread.join()
 
     def guidanceLoop(self):
 
         if self.mission:
-            globPose = self.globPose
+            globPose = estimator.getPoses(0)
             task = self.mission.tasks[0]
 
             if   task.type == Task.TYPE.TAKEOFF:
@@ -227,7 +230,7 @@ class Controller(object):
     def actuatorLoop(self):
 
         # Get current control values
-        c = self.actuator.step(self.globPose, self.actuatorTarget)
+        c = self.actuator.step(estimator.getPoses(0), self.actuatorTarget)
 
         roll_angle  = c['roll_angle']
         pitch_angle = c['pitch_angle']
@@ -285,9 +288,6 @@ class Controller(object):
                 mission.appendTask(task)
 
                 self.mission = mission
-
-            elif str(choice) == "gp":
-                self.globPose = [0,0,1.99,0,0,0]
 
         self.stop()
 
