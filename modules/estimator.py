@@ -49,6 +49,7 @@ class ViconTrackerEstimator(EstimatorBase):
 
     def stop(self):
         self.stopReceiver = True
+        self.join()
 
     def join(self):
         self.poscapturethread.join()
@@ -72,7 +73,7 @@ class ViconTrackerEstimator(EstimatorBase):
             obj.pose = [
             struct.unpack('d',data[offset+27:offset+35])[0]/1000,
             struct.unpack('d',data[offset+35:offset+43])[0]/1000,
-            struct.unpack('d',data[offset+43:offset+51])[0]/1000,,
+            struct.unpack('d',data[offset+43:offset+51])[0]/1000,
             struct.unpack('d',data[offset+51:offset+59])[0],
             struct.unpack('d',data[offset+59:offset+67])[0],
             struct.unpack('d',data[offset+67:offset+75])[0]

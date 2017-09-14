@@ -36,9 +36,13 @@ class Controller(object):
         self.armingInProgress = False
 
     def connectToVehicle(self):
-        logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
-        self.vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
-        logger.info('Connected to the vehice on %s', self.cfg['port'])
+        try:
+            logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
+            self.vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
+            logger.info('Connected to the vehice on %s', self.cfg['port'])
+            return True
+        except:
+            return False
 
     def arm_vehicle(self):
         """
@@ -122,7 +126,7 @@ class Controller(object):
             elif task.type == Task.TYPE.FOLLOW:
                 if not task.active:
                     task.start()
-                if self.followObjPos == -1
+                if self.followObjPos == -1:
                     # task.target = self.vehiclePose[:3]
                     pass # goes to last observed position then hovers
                 else:
@@ -196,26 +200,27 @@ class Controller(object):
         self.pthread = periodicrun(cfg['estimatorPeriod'], self.estimatorLoop, accuracy=0.001)
 
         # Crete actuator and estimator
-        self.actuator = Actuator(vehicle, cfg)
+        self.actuator = Actuator(self.vehicle, self.cfg)
         self.estimator = Estimator(cfg['UDP_IP'], cfg['UDP_PORT'], cfg['VICON_DRONENAME'])
 
         # Start running the estimator and connect to the vehicle
+        if not self.connectToVehicle()
+            return
         self.estimator.run()
-        self.connectToVehicle()
-
         # Start machines
         #self.poscapturethread.start()
         self.pthread.run_thread()
         self.cthread.run_thread()
         self.athread.run_thread()
-
-        self.monitor()
+#
+        #self.monitor()
 
     def stop(self):
         logger.debug('Controller shut down.')
         self.athread.interrupt()
         self.cthread.interrupt()
         self.pthread.interrupt()
+        self.estimator.stop()
         self.vehicle.close()
 
 
