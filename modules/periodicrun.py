@@ -89,7 +89,6 @@ class periodicrun:
     def join(self):
         if self.is_thread:
             self.t.join()
-        else: print "Error: Periodic run is not a seperate thread."
 
     def interrupt(self):
         if self.is_thread:

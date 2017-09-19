@@ -5,29 +5,30 @@
 #
 # ToDo:
 # Thread based manual command system
-# Curses support
 
 import time, math, argparse, imp, logging
+import curses
 
 from dronekit import connect, VehicleMode
 
 from modules.periodicrun import periodicrun
 from modules.estimator import ViconTrackerEstimator as Estimator
 from modules.actuator import SimpleVelocityController as Actuator
+from modules.guidance import MissionGuidance as Guidance
 from modules.mission import Mission
 from modules.mission import Task
 
 class Controller(object):
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, logger):
 
         self.cfg = cfg
+        self.logger = logger
 
         self.vehicle = None
-        self.homePose = [0,0,0,0,0,0]
         self.vehiclePose = [0,0,0,0,0,0]
-        self.mission = None
 
+        self.guidance = None
         self.actuator = None
         self.estimator = None
         self.actuatorTarget = [0,0,2]
@@ -35,13 +36,15 @@ class Controller(object):
 
         self.armingInProgress = False
 
+
     def connectToVehicle(self):
         try:
-            logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
+            self.logger.info('Connecting to vehicle on: %s' % self.cfg['port'])
             self.vehicle = connect(self.cfg['port'], baud=self.cfg['baud'], wait_ready=self.cfg['wait_ready'])
-            logger.info('Connected to the vehice on %s', self.cfg['port'])
+            self.logger.info('Connected to the vehice on %s', self.cfg['port'])
             return True
         except:
+            self.logger.debug('Connection exception!')
             return False
 
     def arm_vehicle(self):
@@ -50,19 +53,19 @@ class Controller(object):
         """
         self.armingInProgress = True
 
-        logger.debug("Check if armed for take-off.")
+        self.logger.debug("Check if armed for take-off.")
         if not self.vehicle.armed:
 
-            logger.info("Switching to STABILIZE mode before arming.")
+            self.logger.info("Switching to STABILIZE mode before arming.")
             while not self.vehicle.mode == "STABILIZE":
                 self.vehicle.mode = VehicleMode("STABILIZE")
                 time.sleep(1)
-            logger.info( "Waiting for arming...")
+            self.logger.info( "Waiting for arming...")
             while not self.vehicle.armed:
                 self.vehicle.armed = True
                 time.sleep(1)
 
-        logger.info("Switching to GUIDED_NOGPS mode.")
+        self.logger.info("Switching to GUIDED_NOGPS mode.")
         while not self.vehicle.mode == "GUIDED_NOGPS":
             self.vehicle.mode = VehicleMode("GUIDED_NOGPS")
             time.sleep(1)
@@ -72,72 +75,12 @@ class Controller(object):
     def distance(self, a, b):
         return math.sqrt((a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2)
 
-    def setVehicleMode(self, mode):
-        self.vehicle.mode = VehicleMode(mode)
 
     def guidanceLoop(self):
-
-        if self.mission:
-            globPose = self.vehiclePose
-            task = self.mission.tasks[0]
-
-            if   task.type == Task.TYPE.TAKEOFF:
-                if not task.active:
-                    task.start()
-                if not self.armingInProgress:
-                    self.arm_vehicle()
-                    task.target = [globPose[0], globPose[1], task.target[2]]
-
-                # Check completed
-                if self.distance(globPose[:3], task.target) < 0.1: #TARGETREACHPRECISION
-                    self.mission.remove(0)
-
-            elif task.type == Task.TYPE.LAND:
-                if not task.active:
-                    task.start()
-                setVehicleMode('LAND')
-
-                # Check completed
-                if self.vehicle.mode == 'LAND':
-                    self.mission.remove(0)
-
-            elif task.type == Task.TYPE.HOVER:
-                if not task.active:
-                    task.start(target=self.mission.previousTarget[:3])
-
-                # Check completed
-                if task.istimeout():
-                    self.mission.remove(0)
-
-            elif task.type == Task.TYPE.MOVETO:
-                if not task.active:
-                    if task.relative:
-                        prevTarget = self.mission.previousTarget
-                        task.target =   [prevTarget[0]+task.target[0],
-                                         prevTarget[1]+task.target[1],
-                                         prevTarget[2]+task.target[2]]
-
-                    task.start()
-
-                # Check completed
-                if self.distance(globPose[:3], task.target) < 0.1: #TARGETREACHPRECISION
-                    self.mission.remove(0)
-
-            elif task.type == Task.TYPE.FOLLOW:
-                if not task.active:
-                    task.start()
-                if self.followObjPos == -1:
-                    # task.target = self.vehiclePose[:3]
-                    pass # goes to last observed position then hovers
-                else:
-                    task.target = self.followObjPos
-
-                # Check completed
-                if task.istimeout():
-                    self.mission.remove(0)
-
-            # Set actuatorTarget
-            self.actuatorTarget = task.target
+        # Set actuatorTarget
+        target = guidance.getTarget()
+        if target:
+            self.actuatorTarget = target
 
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
@@ -150,38 +93,51 @@ class Controller(object):
         poses = self.estimator.getPoses()
         self.vehiclePose = poses[0]
         if poses[1]:
-            self.followObjPos = poses[1][:3]
+            guidance.followObjPos = poses[1][:3]
         else:
-            self.followObjPos = -1
+            guidance.followObjPos = -1
 
-
-    def monitor(self):
+    # Curses window
+    def curses_monitor(self, win):
+        win.nodelay(True)
+        key=""
+        win.clear()
+        win.addstr("Detected key:")
         while True:
-            choice = raw_input("Make your choice: ")
-            if str(choice) == "q":
-                break
+            try:
+                key = win.getkey()
+                #win.clear()
+                #win.addstr("Detected key:")
+                #win.addstr(str(key))
+                key = str(key)
+                if key == 'KEY_BACKSPACE':
+                    break
 
-            elif str(choice) == "gn":
-                self.setVehicleMode('GUIDED_NOGPS')
+                elif key == "KEY_F(10)":
+                    self.vehicle.mode = VehicleMode('GUIDED_NOGPS')
 
-            elif str(choice) == "m":
-                self.setVehicleMode('STABILIZE')
+                elif key == "KEY_F(11)":
+                    self.vehicle.mode = VehicleMode('STABILIZE')
 
-            elif str(choice) == "mi":
-                mission = Mission()
+                elif key == "KEY_F(12)":
+                    mission = Mission()
 
-                task = Task(Task.TYPE.TAKEOFF)
-                task.target = [0,0,2]
-                mission.appendTask(task)
+                    task = Task(Task.TYPE.TAKEOFF)
+                    task.target = [0,0,2]
+                    mission.appendTask(task)
 
-                task = Task(Task.TYPE.HOVER)
-                task.duration = 3
-                mission.appendTask(task)
+                    task = Task(Task.TYPE.HOVER)
+                    task.duration = 3
+                    mission.appendTask(task)
 
-                task = Task(Task.TYPE.LAND)
-                mission.appendTask(task)
+                    task = Task(Task.TYPE.LAND)
+                    mission.appendTask(task)
 
-                self.mission = mission
+                    self.guider.setMission(mission)
+
+            except Exception as e:
+                # No input
+                pass
 
         self.stop()
 
@@ -189,45 +145,42 @@ class Controller(object):
 
         cfg = self.cfg
 
-        #self.udpsock = socket.socket(socket.AF_INET, # Internet
-        #                     socket.SOCK_DGRAM) # UDP
-        #self.udpsock.bind((self.cfg['UDP_IP'], self.cfg['UDP_PORT']))
-                #self.poscapturethread = threading.Thread(target=self.positionReceiver)
-
         # Create guidance, estimator, and actuator loops
-        self.cthread = periodicrun(cfg['guidancePeriod'],  self.guidanceLoop,  accuracy=0.001)
+        self.gthread = periodicrun(cfg['guidancePeriod'],  self.guidanceLoop,  accuracy=0.001)
         self.athread = periodicrun(cfg['actuatorPeriod'],  self.actuatorLoop,  accuracy=0.001)
         self.pthread = periodicrun(cfg['estimatorPeriod'], self.estimatorLoop, accuracy=0.001)
 
         # Crete actuator and estimator
+        self.guidance = Guidance()
         self.actuator = Actuator(self.vehicle, self.cfg)
         self.estimator = Estimator(cfg['UDP_IP'], cfg['UDP_PORT'], cfg['VICON_DRONENAME'])
 
         # Start running the estimator and connect to the vehicle
-        if not self.connectToVehicle()
+        if not self.connectToVehicle():
             return
         self.estimator.run()
         # Start machines
-        #self.poscapturethread.start()
         self.pthread.run_thread()
-        self.cthread.run_thread()
+        self.gthread.run_thread()
         self.athread.run_thread()
-#
-        #self.monitor()
 
     def stop(self):
-        logger.debug('Controller shut down.')
+        self.logger.debug('Controller shut down.')
+
+        # Stop machines
         self.athread.interrupt()
-        self.cthread.interrupt()
+        self.gthread.interrupt()
         self.pthread.interrupt()
+
+        # Stop estimator and close vehicle
         self.estimator.stop()
-        self.vehicle.close()
+        if self.vehicle:
+            self.vehicle.close()
 
 
     def join(self):
-        #self.poscapturethread.join()
         self.athread.join()
-        self.cthread.join()
+        self.gthread.join()
         self.pthread.join()
 
 #######################  Main Program  ##########################
@@ -240,11 +193,16 @@ if __name__ == '__main__':
     # start logger
     logger = logging.getLogger('Controller')
     logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
     formatter = logging.Formatter('%(name)s: %(message)s')
+
+    ch = logging.StreamHandler()
+    fh = logging.FileHandler('test.log')
     ch.setFormatter(formatter)
+    fh.setFormatter(formatter)
+
     logger.addHandler(ch)
+    logger.addHandler(fh)
+
 
     # arg parse here
     config_path = 'config.py'
@@ -258,11 +216,16 @@ if __name__ == '__main__':
     elif cfg['verbose'] == 2:
         formatter = logging.Formatter('%(name)s | %(asctime)s: %(message)s')
         ch.setFormatter(formatter)
+        fh.setFormatter(formatter)
         logger.setLevel(logging.DEBUG)
         logger.debug('Verbose level is set 2. Everything will be displayed as much as possible.')
         print 'test'
 
+    logger.info('test')
     #test(cfg)
-    controller = Controller(cfg)
+    controller = Controller(cfg, logger)
     controller.run()
+
+    curses.wrapper(controller.curses_monitor)
+
     controller.join()

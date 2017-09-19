@@ -14,6 +14,13 @@ class EstimatorBase:
     def getPoses(self, i):
         raise NotImplementedError
 
+class ZeroEstimator(EstimatorBase):
+    # This class is to support manual control or use of external
+    # position estimate schemes. It basically provides 'always zero'
+    # pose. An appropriate actuator should be used.
+    def getPoses(self, i):
+        return [0,0,0,0,0,0]
+
 class TangoPoseEstimator(EstimatorBase):
     def getPoses(self, i):
         raise NotImplementedError
@@ -35,6 +42,7 @@ class ViconTrackerEstimator(EstimatorBase):
         item_name = ''
         pose = [0,0,0,0,0,0]
 
+    poscapturethread = None
     poses = []
     def __init__(self, ip, port, drone_name):
 
@@ -52,7 +60,8 @@ class ViconTrackerEstimator(EstimatorBase):
         self.join()
 
     def join(self):
-        self.poscapturethread.join()
+        if self.poscapturethread:
+            self.poscapturethread.join()
 
     def getPoses(self, i=-1):
         if i>-1:
