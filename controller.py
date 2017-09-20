@@ -6,7 +6,7 @@
 # ToDo:
 # Pass logger to all modules. Maybe a common shared object.
 
-import time, math, argparse, imp, logging
+import time, math, argparse, imp, logging, sys
 import curses
 
 from dronekit import connect, VehicleMode
@@ -121,6 +121,31 @@ class Controller(object):
 
 #######################  User Interface  ##########################
 
+class StreamToLogger(object):
+    """
+    Fake file-like stream object that redirects writes to a logger instance.
+    """
+    def __init__(self, logger, log_level=logging.WARNING):
+        self.logger = logger
+        self.log_level = log_level
+
+    def write(self, buf):
+        for line in buf.rstrip().splitlines():
+            self.logger.log(self.log_level, line.rstrip())
+
+    def flush(self):
+    # create a flush method so things can be flushed when
+    # the system wants to. Not sure if simply 'printing'
+    # sys.stderr is the correct way to do it, but it seemed
+    # to work properly for me.
+        pass
+
+try:
+    unicode
+    _unicode = True
+except NameError:
+    _unicode = False
+
 class CursesHandler(logging.Handler):
     def __init__(self, screen):
         logging.Handler.__init__(self)
@@ -129,8 +154,26 @@ class CursesHandler(logging.Handler):
         try:
             msg = self.format(record)
             screen = self.screen
-            screen.addstr("\r\n%s" % msg)
-            screen.refresh()
+            fs = "\n%s"
+            if not _unicode: #if no unicode support...
+                screen.addstr(fs % msg)
+                screen.refresh()
+            else:
+                try:
+                    if (isinstance(msg, unicode) ):
+                        ufs = u'\n%s'
+                        try:
+                            screen.addstr(ufs % msg)
+                            screen.refresh()
+                        except UnicodeEncodeError:
+                            screen.addstr((ufs % msg).encode(code))
+                            screen.refresh()
+                    else:
+                        screen.addstr(fs % msg)
+                        screen.refresh()
+                except UnicodeError:
+                    screen.addstr(fs % msg.encode("UTF-8"))
+                    screen.refresh()
         except:
             raise
 
@@ -144,6 +187,10 @@ def curses_monitor(win, controller, logger):
     formatter = logging.Formatter('%(name)s | %(asctime)s: %(message)s')
     ch.setFormatter(formatter)
     logger.addHandler(ch)
+
+    stderr_logger = StreamToLogger(logger)
+    sys.stderr = stderr_logger
+
 
     controller.run()
     win.nodelay(True)
@@ -190,6 +237,7 @@ def curses_monitor(win, controller, logger):
 
 #######################  Main Program  ##########################
 
+
 def test(cfg):
     pass
 
@@ -200,7 +248,7 @@ if __name__ == '__main__':
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(name)s: %(message)s\r')
 
-    ch = logging.StreamHandler()
+    ch = logging.StreamHandler(sys.stderr)
     fh = logging.FileHandler('test.log')
     ch.setFormatter(formatter)
     fh.setFormatter(formatter)
