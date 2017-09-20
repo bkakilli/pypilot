@@ -4,7 +4,7 @@
 # 08/23/2017
 #
 # ToDo:
-# Thread based manual command system
+#
 
 import time, math, argparse, imp, logging
 import curses
@@ -12,11 +12,6 @@ import curses
 from dronekit import connect, VehicleMode
 
 from modules.periodicrun import periodicrun
-from modules.estimator import ViconTrackerEstimator as Estimator
-from modules.actuator import SimpleVelocityController as Actuator
-from modules.guidance import MissionGuidance as Guidance
-from modules.mission import Mission
-from modules.mission import Task
 
 class Controller(object):
 
@@ -31,10 +26,8 @@ class Controller(object):
         self.guidance = None
         self.actuator = None
         self.estimator = None
-        self.actuatorTarget = [0,0,2]
+        self.actuatorTarget = [0,0,0]
         self.followObjPos = [0,0,0]
-
-        self.armingInProgress = False
 
 
     def connectToVehicle(self):
@@ -47,35 +40,10 @@ class Controller(object):
             self.logger.debug('Connection exception!')
             return False
 
-    def arm_vehicle(self):
-        """
-        Arms vehicle
-        """
-        self.armingInProgress = True
 
-        self.logger.debug("Check if armed for take-off.")
-        if not self.vehicle.armed:
-
-            self.logger.info("Switching to STABILIZE mode before arming.")
-            while not self.vehicle.mode == "STABILIZE":
-                self.vehicle.mode = VehicleMode("STABILIZE")
-                time.sleep(1)
-            self.logger.info( "Waiting for arming...")
-            while not self.vehicle.armed:
-                self.vehicle.armed = True
-                time.sleep(1)
-
-        self.logger.info("Switching to GUIDED_NOGPS mode.")
-        while not self.vehicle.mode == "GUIDED_NOGPS":
-            self.vehicle.mode = VehicleMode("GUIDED_NOGPS")
-            time.sleep(1)
-
-        self.armingInProgress = False
-
-    def distance(self, a, b):
-        return math.sqrt((a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2)
-
-
+    # Guidance loop is responsible for generating higher level targets
+    # which most of the time comes from a seperate application, possibly
+    # running on some other hardware.
     def guidanceLoop(self):
         # Set actuatorTarget
         target = guidance.getTarget()
@@ -84,11 +52,14 @@ class Controller(object):
 
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
+    # It is responsible for sending attitude commands to the vehicle
     def actuatorLoop(self):
         # Step actuator loop
         self.actuator.step(self.vehiclePose, self.actuatorTarget)
 
 
+    # Estimator loop reads the most updated poses from estimator and writes
+    # into the state object
     def estimatorLoop(self):
         poses = self.estimator.getPoses()
         self.vehiclePose = poses[0]
@@ -97,49 +68,6 @@ class Controller(object):
         else:
             guidance.followObjPos = -1
 
-    # Curses window
-    def curses_monitor(self, win):
-        win.nodelay(True)
-        key=""
-        win.clear()
-        win.addstr("Detected key:")
-        while True:
-            try:
-                key = win.getkey()
-                #win.clear()
-                #win.addstr("Detected key:")
-                #win.addstr(str(key))
-                key = str(key)
-                if key == 'KEY_BACKSPACE':
-                    break
-
-                elif key == "KEY_F(10)":
-                    self.vehicle.mode = VehicleMode('GUIDED_NOGPS')
-
-                elif key == "KEY_F(11)":
-                    self.vehicle.mode = VehicleMode('STABILIZE')
-
-                elif key == "KEY_F(12)":
-                    mission = Mission()
-
-                    task = Task(Task.TYPE.TAKEOFF)
-                    task.target = [0,0,2]
-                    mission.appendTask(task)
-
-                    task = Task(Task.TYPE.HOVER)
-                    task.duration = 3
-                    mission.appendTask(task)
-
-                    task = Task(Task.TYPE.LAND)
-                    mission.appendTask(task)
-
-                    self.guider.setMission(mission)
-
-            except Exception as e:
-                # No input
-                pass
-
-        self.stop()
 
     def run(self):
 
@@ -150,10 +78,14 @@ class Controller(object):
         self.athread = periodicrun(cfg['actuatorPeriod'],  self.actuatorLoop,  accuracy=0.001)
         self.pthread = periodicrun(cfg['estimatorPeriod'], self.estimatorLoop, accuracy=0.001)
 
-        # Crete actuator and estimator
-        self.guidance = Guidance()
-        self.actuator = Actuator(self.vehicle, self.cfg)
-        self.estimator = Estimator(cfg['UDP_IP'], cfg['UDP_PORT'], cfg['VICON_DRONENAME'])
+        # Load and create schemes
+        Estimator = getattr(imp.load_source('estimator', 'modules/estimator.py'), cfg['EstimatorScheme'])
+        Actuator  = getattr(imp.load_source('actuator',  'modules/actuator.py'),  cfg['ActuatorScheme'])
+        Guidance  = getattr(imp.load_source('guidance',  'modules/guidance.py'),  cfg['GuidanceScheme'])
+
+        self.guidance = Guidance(cfg)
+        self.actuator = Actuator(cfg, self.vehicle)
+        self.estimator = Estimator(cfg)
 
         # Start running the estimator and connect to the vehicle
         if not self.connectToVehicle():
@@ -183,6 +115,60 @@ class Controller(object):
         self.gthread.join()
         self.pthread.join()
 
+    def test(self):
+        self.logger.debug('Test called.')
+
+#######################  User Interface  ##########################
+
+# Curses window
+def curses_monitor(win, controller):
+    from modules.mission import Mission
+    from modules.mission import Task
+
+    win.nodelay(True)
+    key=""
+    win.clear()
+    while True:
+        try:
+            key = win.getkey()
+            #win.clear()
+            #win.addstr("Detected key:")
+            #win.addstr(str(key))
+            key = str(key)
+            if key == 'KEY_BACKSPACE':
+                break
+
+            if key == 'r':
+                controller.test()
+
+            elif key == "KEY_F(10)":
+                controller.vehicle.mode = VehicleMode('GUIDED_NOGPS')
+
+            elif key == "KEY_F(11)":
+                controller.vehicle.mode = VehicleMode('STABILIZE')
+
+            elif key == "KEY_F(12)":
+                mission = Mission()
+
+                task = Task(Task.TYPE.TAKEOFF)
+                task.target = [0,0,2]
+                mission.appendTask(task)
+
+                task = Task(Task.TYPE.HOVER)
+                task.duration = 3
+                mission.appendTask(task)
+
+                task = Task(Task.TYPE.LAND)
+                mission.appendTask(task)
+
+                controller.guidance.setMission(mission)
+
+        except Exception as e:
+            # No input
+            pass
+
+    controller.stop()
+
 #######################  Main Program  ##########################
 
 def test(cfg):
@@ -193,7 +179,7 @@ if __name__ == '__main__':
     # start logger
     logger = logging.getLogger('Controller')
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(name)s: %(message)s')
+    formatter = logging.Formatter('%(name)s: %(message)s\r')
 
     ch = logging.StreamHandler()
     fh = logging.FileHandler('test.log')
@@ -214,7 +200,7 @@ if __name__ == '__main__':
     if cfg['verbose'] == 1:
         logger.setLevel(logging.INFO)
     elif cfg['verbose'] == 2:
-        formatter = logging.Formatter('%(name)s | %(asctime)s: %(message)s')
+        formatter = logging.Formatter('%(name)s | %(asctime)s: %(message)s\r')
         ch.setFormatter(formatter)
         fh.setFormatter(formatter)
         logger.setLevel(logging.DEBUG)
@@ -222,10 +208,7 @@ if __name__ == '__main__':
         print 'test'
 
     logger.info('test')
-    #test(cfg)
     controller = Controller(cfg, logger)
     controller.run()
-
-    curses.wrapper(controller.curses_monitor)
-
+    curses.wrapper(curses_monitor, controller)
     controller.join()

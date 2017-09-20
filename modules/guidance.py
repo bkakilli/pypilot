@@ -9,9 +9,43 @@ class GuidanceBase:
 class MissionGuidance(GuidanceBase):
     mission = None
     followObjPos = -1
+    cfg = None
+
+    def __init__(cfg):
+        self.cfg = cfg
+        self.armingInProgress = False
 
     def setMission(mission):
         self.mission = mission
+
+
+    def arm_vehicle(self):
+        """
+        Arms vehicle
+        """
+        self.armingInProgress = True
+
+        self.logger.debug("Check if armed for take-off.")
+        if not self.vehicle.armed:
+
+            self.logger.info("Switching to STABILIZE mode before arming.")
+            while not self.vehicle.mode == "STABILIZE":
+                self.vehicle.mode = VehicleMode("STABILIZE")
+                time.sleep(1)
+            self.logger.info( "Waiting for arming...")
+            while not self.vehicle.armed:
+                self.vehicle.armed = True
+                time.sleep(1)
+
+        self.logger.info("Switching to GUIDED_NOGPS mode.")
+        while not self.vehicle.mode == "GUIDED_NOGPS":
+            self.vehicle.mode = VehicleMode("GUIDED_NOGPS")
+            time.sleep(1)
+
+        self.armingInProgress = False
+
+    def distance(self, a, b):
+        return math.sqrt((a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2)
 
     def getTarget(globPose):
 

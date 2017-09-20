@@ -19,5 +19,9 @@ cfg = {
     'takeoff_altitude': 0.5,
     'verbose': 2,   # 0,1,2
 	'tuning': tuning,
-	'VICON_DRONENAME': 'BURAK_DRONE'
+	'VICON_DRONENAME': 'BURAK_DRONE',
+
+	'EstimatorScheme': 'ViconTrackerEstimator',
+	'ActuatorScheme': 'SimpleVelocityController',
+	'GuidanceScheme': 'MissionGuidance'
     }

@@ -18,7 +18,7 @@ class ZeroEstimator(EstimatorBase):
     # This class is to support manual control or use of external
     # position estimate schemes. It basically provides 'always zero'
     # pose. An appropriate actuator should be used.
-    def getPoses(self, i):
+    def getPoses(self, i=-1):
         return [0,0,0,0,0,0]
 
 class TangoPoseEstimator(EstimatorBase):
@@ -42,14 +42,17 @@ class ViconTrackerEstimator(EstimatorBase):
         item_name = ''
         pose = [0,0,0,0,0,0]
 
+    cfg = None
     poscapturethread = None
     poses = []
-    def __init__(self, ip, port, drone_name):
+
+    def __init__(self, cfg, ip, port, drone_name):
+        self.cfg = cfg
 
         self.udpsock = socket.socket(socket.AF_INET, # Internet
                              socket.SOCK_DGRAM) # UDP
-        self.udpsock.bind((ip, port))
-        self.drone_name = drone_name
+        self.udpsock.bind((cfg['UDP_IP'], cfg['UDP_PORT']))
+        self.drone_name = cfg['VICON_DRONENAME']
 
     def run(self):
         self.poscapturethread = threading.Thread(target=self.positionReceiver)

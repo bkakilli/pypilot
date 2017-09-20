@@ -19,7 +19,7 @@ class SimpleVelocityController(ControllerBase):
     targetPosition = np.array([0,0,0])
     error = np.zeros((3,3))
 
-    def __init__(self, vehicle, cfg):
+    def __init__(self, cfg, vehicle):
         self.lasttime = time.time()
         self.vehicle = vehicle
         self.cfg = cfg
