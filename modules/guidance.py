@@ -1,9 +1,11 @@
-
+import time, math
+from dronekit import connect, VehicleMode
+from pymavlink import mavutil
 from modules.mission import Mission
 from modules.mission import Task
 
 class GuidanceBase:
-    def getTarget(pose):
+    def getTarget(self, pose):
         raise NotImplementedError
 
 class MissionGuidance(GuidanceBase):
@@ -11,11 +13,13 @@ class MissionGuidance(GuidanceBase):
     followObjPos = -1
     cfg = None
 
-    def __init__(cfg):
+    def __init__(self, cfg, logger, vehicle):
         self.cfg = cfg
+        self.logger = logger
+        self.vehicle = vehicle
         self.armingInProgress = False
 
-    def setMission(mission):
+    def setMission(self, mission):
         self.mission = mission
 
 
@@ -47,7 +51,7 @@ class MissionGuidance(GuidanceBase):
     def distance(self, a, b):
         return math.sqrt((a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2)
 
-    def getTarget(globPose):
+    def getTarget(self, globPose):
 
         if self.mission:
             if len(self.mission.tasks) == 0:

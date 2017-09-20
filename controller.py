@@ -4,7 +4,7 @@
 # 08/23/2017
 #
 # ToDo:
-#
+# Pass logger to all modules. Maybe a common shared object.
 
 import time, math, argparse, imp, logging
 import curses
@@ -46,7 +46,7 @@ class Controller(object):
     # running on some other hardware.
     def guidanceLoop(self):
         # Set actuatorTarget
-        target = guidance.getTarget()
+        target = self.guidance.getTarget(self.vehiclePose)
         if target:
             self.actuatorTarget = target
 
@@ -63,10 +63,10 @@ class Controller(object):
     def estimatorLoop(self):
         poses = self.estimator.getPoses()
         self.vehiclePose = poses[0]
-        if poses[1]:
-            guidance.followObjPos = poses[1][:3]
-        else:
-            guidance.followObjPos = -1
+        #if not len(poses)==1:
+        #    self.guidance.followObjPos = poses[1][:3]
+        #else:
+        #    self.guidance.followObjPos = -1
 
 
     def run(self):
@@ -83,15 +83,16 @@ class Controller(object):
         Actuator  = getattr(imp.load_source('actuator',  'modules/actuator.py'),  cfg['ActuatorScheme'])
         Guidance  = getattr(imp.load_source('guidance',  'modules/guidance.py'),  cfg['GuidanceScheme'])
 
-        self.guidance = Guidance(cfg)
-        self.actuator = Actuator(cfg, self.vehicle)
-        self.estimator = Estimator(cfg)
-
         # Start running the estimator and connect to the vehicle
         if not self.connectToVehicle():
             return
-        self.estimator.run()
         # Start machines
+        logger.debug('Machines are starting.')
+        self.guidance = Guidance(cfg, logger, self.vehicle)
+        self.actuator = Actuator(cfg, logger, self.vehicle)
+        self.estimator = Estimator(cfg, logger)
+
+        self.estimator.run()
         self.pthread.run_thread()
         self.gthread.run_thread()
         self.athread.run_thread()
@@ -120,14 +121,32 @@ class Controller(object):
 
 #######################  User Interface  ##########################
 
+class CursesHandler(logging.Handler):
+    def __init__(self, screen):
+        logging.Handler.__init__(self)
+        self.screen = screen
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            screen = self.screen
+            screen.addstr("\r\n%s" % msg)
+            screen.refresh()
+        except:
+            raise
+
 # Curses window
-def curses_monitor(win, controller):
+def curses_monitor(win, controller, logger):
     from modules.mission import Mission
     from modules.mission import Task
 
+
+    ch = CursesHandler(win)
+    formatter = logging.Formatter('%(name)s | %(asctime)s: %(message)s')
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    controller.run()
     win.nodelay(True)
-    key=""
-    win.clear()
     while True:
         try:
             key = win.getkey()
@@ -186,9 +205,8 @@ if __name__ == '__main__':
     ch.setFormatter(formatter)
     fh.setFormatter(formatter)
 
-    logger.addHandler(ch)
+    #logger.addHandler(ch)
     logger.addHandler(fh)
-
 
     # arg parse here
     config_path = 'config.py'
@@ -200,15 +218,14 @@ if __name__ == '__main__':
     if cfg['verbose'] == 1:
         logger.setLevel(logging.INFO)
     elif cfg['verbose'] == 2:
-        formatter = logging.Formatter('%(name)s | %(asctime)s: %(message)s\r')
+        formatter = logging.Formatter('%(name)s | %(asctime)s: %(message)s')
         ch.setFormatter(formatter)
         fh.setFormatter(formatter)
         logger.setLevel(logging.DEBUG)
         logger.debug('Verbose level is set 2. Everything will be displayed as much as possible.')
-        print 'test'
 
     logger.info('test')
     controller = Controller(cfg, logger)
-    controller.run()
-    curses.wrapper(curses_monitor, controller)
+    # Start UI
+    curses.wrapper(curses_monitor, controller, logger)
     controller.join()

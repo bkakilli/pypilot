@@ -1,4 +1,4 @@
-import socket, struct
+import socket, struct, threading
 #from bluetooth import *
 
 class EstimatorBase:
@@ -18,8 +18,19 @@ class ZeroEstimator(EstimatorBase):
     # This class is to support manual control or use of external
     # position estimate schemes. It basically provides 'always zero'
     # pose. An appropriate actuator should be used.
+    def __init__(self, cfg, logger):
+        pass
+    def run(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def join(self):
+        pass
+
     def getPoses(self, i=-1):
-        return [0,0,0,0,0,0]
+        return [[0,0,0,0,0,0]]
 
 class TangoPoseEstimator(EstimatorBase):
     def getPoses(self, i):
@@ -46,8 +57,9 @@ class ViconTrackerEstimator(EstimatorBase):
     poscapturethread = None
     poses = []
 
-    def __init__(self, cfg, ip, port, drone_name):
+    def __init__(self, cfg, logger):
         self.cfg = cfg
+        self.logger = logger
 
         self.udpsock = socket.socket(socket.AF_INET, # Internet
                              socket.SOCK_DGRAM) # UDP

@@ -13,15 +13,15 @@ cfg = {
     'UDP_IP': '0.0.0.0',
     'UDP_PORT': 9876,
     'wait_ready' : False,
-    'actuatorPeriod': 0.1,
-    'guidancePeriod': 0.1,
-    'estimatorPeriod': 0.02,
+    'actuatorPeriod': 0.2,
+    'guidancePeriod': 0.2,
+    'estimatorPeriod': 0.2,
     'takeoff_altitude': 0.5,
     'verbose': 2,   # 0,1,2
 	'tuning': tuning,
 	'VICON_DRONENAME': 'BURAK_DRONE',
 
-	'EstimatorScheme': 'ViconTrackerEstimator',
+	'EstimatorScheme': 'ZeroEstimator',
 	'ActuatorScheme': 'SimpleVelocityController',
 	'GuidanceScheme': 'MissionGuidance'
     }

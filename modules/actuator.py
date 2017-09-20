@@ -1,5 +1,5 @@
 import numpy as np
-import time
+import time, math
 
 from dronekit import connect
 from pymavlink import mavutil
@@ -19,10 +19,11 @@ class SimpleVelocityController(ControllerBase):
     targetPosition = np.array([0,0,0])
     error = np.zeros((3,3))
 
-    def __init__(self, cfg, vehicle):
+    def __init__(self, cfg, logger, vehicle):
         self.lasttime = time.time()
-        self.vehicle = vehicle
         self.cfg = cfg
+        self.logger = logger
+        self.vehicle = vehicle
 
     def to_quaternion(self, roll = 0.0, pitch = 0.0, yaw = 0.0):
         """
