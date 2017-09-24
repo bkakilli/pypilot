@@ -1,3 +1,4 @@
 *.pyc
 pytest.py
 virtenvdrone
+*.log

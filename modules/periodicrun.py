@@ -83,13 +83,12 @@ class periodicrun:
             now = time.time()
             #print "now: ", now, ". self.lasttime: ", self.lasttime, ". diff: ", now-self.lasttime, "tol: ", self.tolerance
             if now-self.lasttime > self.tolerance:
-                print "Warning: Execution time exceeds period duration!"
+                print "Warning: Execution time exceeds period duration in {}!\r".format(self.loop.__name__)
             self.lasttime = now
 
     def join(self):
         if self.is_thread:
             self.t.join()
-        else: print "Error: Periodic run is not a seperate thread."
 
     def interrupt(self):
         if self.is_thread:

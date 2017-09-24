@@ -1,4 +1,4 @@
-import socket, struct
+import socket, struct, threading
 #from bluetooth import *
 
 class EstimatorBase:
@@ -9,10 +9,41 @@ class EstimatorBase:
         raise NotImplementedError
 
     def join(self):
-        NotImplementedError
+        raise NotImplementedError
 
-    def getPoses(self):
-        NotImplementedError
+    def getPoses(self, i):
+        raise NotImplementedError
+
+class ZeroEstimator(EstimatorBase):
+    # This class is to support manual control or use of external
+    # position estimate schemes. It basically provides 'always zero'
+    # pose. An appropriate actuator should be used.
+    def __init__(self, cfg, logger):
+        pass
+    def run(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def join(self):
+        pass
+
+    def getPoses(self, i=-1):
+        return [[0,0,0,0,0,0]]
+
+class TangoPoseEstimator(EstimatorBase):
+    def getPoses(self, i):
+        raise NotImplementedError
+
+    def stop(self):
+        raise NotImplementedError
+
+    def join(self):
+        raise NotImplementedError
+
+    def getPoses(self, i):
+        raise NotImplementedError
 
 class ViconTrackerEstimator(EstimatorBase):
 
@@ -22,13 +53,18 @@ class ViconTrackerEstimator(EstimatorBase):
         item_name = ''
         pose = [0,0,0,0,0,0]
 
+    cfg = None
+    poscapturethread = None
     poses = []
-    def __init__(self, ip, port, drone_name):
+
+    def __init__(self, cfg, logger):
+        self.cfg = cfg
+        self.logger = logger
 
         self.udpsock = socket.socket(socket.AF_INET, # Internet
                              socket.SOCK_DGRAM) # UDP
-        self.udpsock.bind((ip, port))
-        self.drone_name = drone_name
+        self.udpsock.bind((cfg['UDP_IP'], cfg['UDP_PORT']))
+        self.drone_name = cfg['VICON_DRONENAME']
 
     def run(self):
         self.poscapturethread = threading.Thread(target=self.positionReceiver)
@@ -36,9 +72,11 @@ class ViconTrackerEstimator(EstimatorBase):
 
     def stop(self):
         self.stopReceiver = True
+        self.join()
 
     def join(self):
-        self.poscapturethread.join()
+        if self.poscapturethread:
+            self.poscapturethread.join()
 
     def getPoses(self, i=-1):
         if i>-1:
@@ -59,7 +97,7 @@ class ViconTrackerEstimator(EstimatorBase):
             obj.pose = [
             struct.unpack('d',data[offset+27:offset+35])[0]/1000,
             struct.unpack('d',data[offset+35:offset+43])[0]/1000,
-            struct.unpack('d',data[offset+43:offset+51])[0]/1000,,
+            struct.unpack('d',data[offset+43:offset+51])[0]/1000,
             struct.unpack('d',data[offset+51:offset+59])[0],
             struct.unpack('d',data[offset+59:offset+67])[0],
             struct.unpack('d',data[offset+67:offset+75])[0]
