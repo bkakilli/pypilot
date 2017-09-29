@@ -20,6 +20,9 @@ cfg = {
     'verbose': 2,   # 0,1,2
 	'tuning': tuning,
 	'VICON_DRONENAME': 'BURAK_DRONE',
+	
+	'btAddr': '00:16:D4:F3:59:70',
+	'btUUID': '00001101-0000-1000-8000-00805F9B34FB',
 
 	'EstimatorScheme': 'ZeroEstimator',
 	'ActuatorScheme': 'SimpleVelocityController',

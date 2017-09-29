@@ -74,7 +74,7 @@ class MissionGuidance(GuidanceBase):
             elif task.type == Task.TYPE.LAND:
                 if not task.active:
                     task.start()
-                setVehicleMode('LAND')
+                self.vehicle.mode = VehicleMode('LAND')
 
                 # Check completed
                 if self.vehicle.mode == 'LAND':
