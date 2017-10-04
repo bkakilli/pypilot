@@ -10,6 +10,7 @@ import argparse, logging, sys, imp
 import curses
 
 from modules.pilot import Pilot
+from modules.mission import Mission, Task
 
 #######################  User Interface  ##########################
 
@@ -82,11 +83,11 @@ def curses_monitor(win, pilot, logger):
 
     stderr_logger = StreamToLogger(logger)
     sys.stderr = stderr_logger
-    
+
     win.nodelay(True)
 
     if pilot.run():
-    
+
         while True:
             try:
                 key = win.getkey()
@@ -96,7 +97,7 @@ def curses_monitor(win, pilot, logger):
                 key = str(key)
                 if key == 'KEY_BACKSPACE' or key == 'KEY_F(8)':
                     break
-                    
+
                 if key == 'r':
                     pilot.test()
 
@@ -157,13 +158,13 @@ if __name__ == '__main__':
     logger.setLevel(logLevel)
 
     if True:
-        fh = logging.FileHandler('test.log')
+        fh = logging.FileHandler('test_tango.log')
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 
     pilot = Pilot(cfg, logger)
     # Start UI
-    if True:
+    if False:
         curses.wrapper(curses_monitor, pilot, logger)
     else:
         ch = logging.StreamHandler()
@@ -171,9 +172,42 @@ if __name__ == '__main__':
         logger.addHandler(ch)
         if pilot.run():
             while True:
-                choice = raw_input("Make your choice: ")
-                if str(choice) == "q":
+                choice = str(raw_input("Make your choice: "))
+                if choice == 'q':
                     break
-                
+                elif choice == 'h':
+                    pilot.setHome()
+                elif choice == 'm':
+                    mission = Mission()
+
+                    task = Task(Task.TYPE.TAKEOFF)
+                    task.target = [0,0,1.5]
+                    mission.appendTask(task)
+
+                    #task = Task(Task.TYPE.HOVER)
+                    #task.duration = 5
+                    #mission.appendTask(task)
+
+                    task = Task(Task.TYPE.MOVETO)
+                    task.target = [1.5,0,1.5]
+                    task.relative = False
+
+                    task = Task(Task.TYPE.MOVETO)
+                    task.target = [-1.5,0,1.5]
+                    task.relative = False
+
+                    task = Task(Task.TYPE.MOVETO)
+                    task.target = [0,0,1.5]
+                    task.relative = False
+
+                    task = Task(Task.TYPE.MOVETO)
+                    task.target = [0,0,0.05]
+                    task.relative = False
+
+                    task = Task(Task.TYPE.LAND)
+                    mission.appendTask(task)
+
+                    pilot.guidance.setMission(mission)
+
             pilot.stop()
     pilot.join()

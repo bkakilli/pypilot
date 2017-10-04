@@ -86,9 +86,11 @@ class SimpleVelocityController(ControllerBase):
         angle = err[:2,:].dot(self.cfg['tuning']['PID_xy'])
         thrust_add = err[2,:].dot(self.cfg['tuning']['PID_z'])
 
-        roll_angle  = angle[0]
-        pitch_angle = -angle[1]
+        roll_angle  = -angle[1]
+        pitch_angle = -angle[0]
         thrust = 0.5 + thrust_add
+
+        #print 'roll: {}\npitch: {}\nthrust: {}'.format(roll_angle, pitch_angle, thrust)
 
         # Use defaults for the others
         yaw_rate = 0.0

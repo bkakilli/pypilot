@@ -1,4 +1,4 @@
-import time, math
+import time, math, threading
 from dronekit import connect, VehicleMode
 from pymavlink import mavutil
 from modules.mission import Mission
@@ -12,6 +12,7 @@ class MissionGuidance(GuidanceBase):
     mission = None
     followObjPos = -1
     cfg = None
+    armingThread = None
 
     def __init__(self, cfg, logger, vehicle):
         self.cfg = cfg
@@ -63,13 +64,15 @@ class MissionGuidance(GuidanceBase):
             if   task.type == Task.TYPE.TAKEOFF:
                 if not task.active:
                     task.start()
-                if not self.armingInProgress:
-                    self.arm_vehicle()
+                if not self.armingInProgress and not self.vehicle.armed:
                     task.target = [globPose[0], globPose[1], task.target[2]]
+                    self.armingThread = threading.Thread(target=self.arm_vehicle)
+                    self.armingThread.start()
 
                 # Check completed
                 if self.distance(globPose[:3], task.target) < 0.1: #TARGETREACHPRECISION
                     self.mission.remove(0)
+                    self.armingThread.join()
 
             elif task.type == Task.TYPE.LAND:
                 if not task.active:
@@ -82,7 +85,8 @@ class MissionGuidance(GuidanceBase):
 
             elif task.type == Task.TYPE.HOVER:
                 if not task.active:
-                    task.start(target=self.mission.previousTarget[:3])
+                    task.target = self.mission.previousTarget[:3]
+                    task.start()
 
                 # Check completed
                 if task.istimeout():

@@ -35,7 +35,7 @@ class Task:
     def __init__(self, t):
         self.type = t
 
-    def start(self, target=[0,0,0], duration=0):
+    def start(self, duration=0):
         self.active = True
         self.starttime = time.time()
 

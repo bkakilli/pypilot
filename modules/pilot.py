@@ -20,10 +20,12 @@ class Pilot(object):
 
         self.vehicle = None
         self.vehiclePose = [0,0,0,0,0,0]
+        self.homePose = [0,0,0,0,0,0]
+        self.setHomeCmd = False
 
         self.athread = None
         self.gthread = None
-        self.pthread = None
+
         self.guidance = None
         self.actuator = None
         self.estimator = None
@@ -51,13 +53,13 @@ class Pilot(object):
         if target:
             self.actuatorTarget = target
 
+        #print self.vehiclePose
 
     # This actuator loop is executed in every cfg['actuatorPeriod'] sec
     # It is responsible for sending attitude commands to the vehicle
     def actuatorLoop(self):
         # Step actuator loop
         self.actuator.step(self.vehiclePose, self.actuatorTarget)
-
 
     # Estimator loop reads the most updated poses from estimator and writes
     # into the state object
@@ -71,6 +73,24 @@ class Pilot(object):
         #else:
         #    self.guidance.followObjPos = -1
 
+    def updateEstimations(self, poses):
+        if self.setHomeCmd:
+            for i in range(6):
+                self.homePose[i] = poses[0][i]
+            self.setHomeCmd = False
+
+        for i in [0,1,2]:
+            self.vehiclePose[i] = poses[0][i] - self.homePose[i]
+        for i in [3,4,5]:
+            self.vehiclePose[i] = poses[0][i] - self.homePose[i]
+            if self.vehiclePose[i] > math.pi:
+                self.vehiclePose[i] = -2*math.pi + self.vehiclePose[i]
+            elif self.vehiclePose[i] < -math.pi:
+                self.vehiclePose[i] =  2*math.pi + self.vehiclePose[i]
+
+
+    def setHome(self):
+        self.setHomeCmd = True
 
     def run(self):
 
@@ -85,39 +105,36 @@ class Pilot(object):
         Estimator = getattr(imp.load_source('estimator', 'modules/estimator.py'), cfg['EstimatorScheme'])
         Actuator  = getattr(imp.load_source('actuator',  'modules/actuator.py'),  cfg['ActuatorScheme'])
         Guidance  = getattr(imp.load_source('guidance',  'modules/guidance.py'),  cfg['GuidanceScheme'])
-            
+
         # Create machines
         self.logger.debug('Machines are starting.')
         self.guidance = Guidance(cfg, self.logger, self.vehicle)
         self.actuator = Actuator(cfg, self.logger, self.vehicle)
-        self.estimator = Estimator(cfg, self.logger)
-        
+        self.estimator = Estimator(cfg, self.logger, self.updateEstimations)
+
         # Start position estimator
         if not self.estimator.run():
             self.logger.error('Estimator could not run.')
             return False
-        
+
         # Create guidance, estimator, and actuator loops then run
         self.gthread = periodicrun(cfg['guidancePeriod'],  self.guidanceLoop,  accuracy=0.001)
         self.athread = periodicrun(cfg['actuatorPeriod'],  self.actuatorLoop,  accuracy=0.001)
-        self.pthread = periodicrun(cfg['estimatorPeriod'], self.estimatorLoop, accuracy=0.001)
-        
-        self.pthread.run_thread()
+
         self.gthread.run_thread()
         self.athread.run_thread()
-        
+
         return True
 
     def stop(self):
         # Stop machines
         self.athread.interrupt()
         self.gthread.interrupt()
-        self.pthread.interrupt()
 
         # Stop estimator and close vehicle
         self.estimator.stop()
         self.vehicle.close()
-        
+
         self.logger.debug('Pilot shut down.')
 
 
@@ -126,8 +143,6 @@ class Pilot(object):
             self.athread.join()
         if self.gthread:
             self.gthread.join()
-        if self.pthread:
-            self.pthread.join()
 
     def test(self):
         self.logger.debug('Test called.')

@@ -1,4 +1,4 @@
-import socket, threading, math
+import socket, threading, math, time
 from bluetooth import *
 from struct import *
 
@@ -19,19 +19,47 @@ class ZeroEstimator(EstimatorBase):
     # This class is to support manual control or use of external
     # position estimate schemes. It basically provides 'always zero'
     # pose. An appropriate actuator should be used.
-    def __init__(self, cfg, logger):
+
+    poscapturethread = None
+    poses = []
+
+    def __init__(self, cfg, logger, updateHandle):
+        self.logger = logger
+        self.updateHandle = updateHandle
+        self.stopReceiver = False
         pass
+
+    def positionReceiver(self):
+        while not self.stopReceiver:
+            self.updateHandle([[0,0,0,0,0,0]])
+            time.sleep(0.01)
+
     def run(self):
+
+        try:
+            self.logger.info("Connected to zero pose estimator.")
+
+            self.poscapturethread = threading.Thread(target=self.positionReceiver)
+            self.poscapturethread.start()
+
+        except Exception as error:
+            self.logger.error('Could not run zero estimator:')
+            self.logger.error(repr(error))
+            self.stopReceiver = True
+            return False
+
         return True
 
     def stop(self):
-        pass
+        self.stopReceiver = True
+        self.join()
 
     def join(self):
-        pass
+        if self.poscapturethread:
+            self.poscapturethread.join()
 
     def getPoses(self, i=-1):
-        return [[0,0,0,0,0,0]]
+        pass
 
 class TangoPoseEstimator(EstimatorBase):
 
@@ -39,16 +67,17 @@ class TangoPoseEstimator(EstimatorBase):
     poscapturethread = None
     poses = []
 
-    def __init__(self, cfg, logger):
+    def __init__(self, cfg, logger, updateHandle):
         self.cfg = cfg
         self.logger = logger
+        self.updateHandle = updateHandle
         self.btUUID = cfg['btUUID']
         self.btAddr = cfg['btAddr']
         self.stopReceiver = False
 
     def getPoses(self, i):
         raise NotImplementedError
-    
+
     def run(self):
         # BT Connection
         service_matches = find_service( uuid = self.btUUID, address = self.btAddr )
@@ -71,16 +100,16 @@ class TangoPoseEstimator(EstimatorBase):
             self.sock.connect((host, port))
 
             self.logger.info("Connected to bluetooth pose estimator.")
-        
+
             self.poscapturethread = threading.Thread(target=self.positionReceiver)
             self.poscapturethread.start()
-            
+
         except Exception as error:
             self.logger.error('Could not create or connect to bluetooth socket:')
             self.logger.error(repr(error))
             self.stopReceiver = True
             return False
-        
+
         return True
 
     def stop(self):
@@ -93,38 +122,41 @@ class TangoPoseEstimator(EstimatorBase):
 
     def getPoses(self):
         return self.poses
-        
+
     # https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles
     def Quaternion_toEulerianAngle(self, x, y, z, w):
         ysqr = y*y
-        
+
         t0 = +2.0 * (w * x + y*z)
         t1 = +1.0 - 2.0 * (x*x + ysqr)
-        X = math.degrees(math.atan2(t0, t1))
-        
+        X = math.atan2(t0, t1)
+
         t2 = +2.0 * (w*y - z*x)
         t2 =  1 if t2 > 1 else t2
         t2 = -1 if t2 < -1 else t2
-        Y = math.degrees(math.asin(t2))
-        
+        Y = math.asin(t2)
+
         t3 = +2.0 * (w * z + x*y)
         t4 = +1.0 - 2.0 * (ysqr + z*z)
-        Z = math.degrees(math.atan2(t3, t4))
-        
-        return [X,Y,Z] 
-        
+        Z = math.atan2(t3, t4)
+
+        return [X,Y,Z]
+
     def positionReceiver(self):
         while not self.stopReceiver:
             received = self.sock.recv(28)
             rPose = unpack('<fffffff', received)
             rot = self.Quaternion_toEulerianAngle(rPose[3],rPose[4],rPose[5],rPose[6])
-            rPose = [rPose[0],rPose[1],rPose[2],rot[0],rot[1],rot[2]]
-            
+
+            # Notice the coordinate axis conversion below
+            rPose = [rPose[1],-rPose[0],rPose[2],rot[0],rot[1],rot[2]]
+
             self.poses = []
             self.poses.append(rPose)
-        
+            self.updateHandle(self.poses)
+
         self.sock.close()
-        
+
 
 class ViconTrackerEstimator(EstimatorBase):
 
@@ -144,7 +176,7 @@ class ViconTrackerEstimator(EstimatorBase):
         self.stopReceiver = False
 
     def run(self):
-        
+
         try:
             self.udpsock = socket.socket(socket.AF_INET, # Internet
                                  socket.SOCK_DGRAM) # UDP
@@ -153,12 +185,12 @@ class ViconTrackerEstimator(EstimatorBase):
             self.logger.error('Could not connect to Vicon.')
             self.stopReceiver = True
             return False
-            
+
         self.drone_name = cfg['VICON_DRONENAME']
-        
+
         self.poscapturethread = threading.Thread(target=self.positionReceiver)
         self.poscapturethread.start()
-        
+
         return True
 
     def stop(self):
@@ -203,7 +235,7 @@ class ViconTrackerEstimator(EstimatorBase):
         while not self.stopReceiver:
             data, addr = self.udpsock.recvfrom(256) # buffer size is 1024 byt$
             v_objects = viconObjectDeserialize(data)
-            
+
             self.poses = []
             for v_obj in v_objects:
                 self.poses.append(v_obj.pose)
