@@ -2,11 +2,15 @@
 A python based highly modular auto-piloting firmware for onboard companion systems.
 
 ### Overview
-PyPilot firmware is suitable for any user who wants to control their aerial vehicle either autonomously or manually. But it's power is that it allows users/developers to use their own aerial systems and their own control and guidance algorithms on a plug-and-play basis. The firmware consists of a core piloting backbone and various control, guidance, position estimation, and mission planning schemes. It allows users to define their own hardware configurations as well as their own control and guidance scheme so that they don't have to stick to a certain type of a vehicle, flight controller, control algorithm, or guidance scheme.
+PyPilot firmware is suitable for any user who wants to control their aerial vehicle either autonomously or manually. But its power comes from that it allows users/developers to use their own aerial systems and their own control and guidance algorithms on a plug-and-play basis. The firmware consists of a core piloting backbone and various control, guidance, position estimation, and mission planning schemes. It allows users to define their own hardware configurations as well as their own control and guidance scheme so that they don't have to stick to a certain type of a vehicle, flight controller, control algorithm, or guidance scheme.
 
-Additionally, PyPilot offers a beautiful Curses based CLI (command line interface) as ground control/monitoring station over a simple SSH connecton.
+It is written in pure python, so anybody with basic Python knowledge can easily adapt PyPilot in their project. Additionally, PyPilot offers a beautiful Curses based CLI (command line interface) as ground control/monitoring station over a simple SSH connection. (Currently it's not working. It'll be fixed as soon as possible.)
 
-There are many already-defined vehicles and flight controllers, and many user simply can plug their onboard controller (a.k.a companion computer) to their vehicle and run an autonomous mission. PyPilot can also be used for manual flights, with your keyboard and the user interface provided. Our effort is to extend the compatibility of PyPilot across as many hardware/software as possible. Therefore you are more than welcome to integrate your own configuration and control/guidance model with PyPilot by pull requests.
+Although currently only one vehicle is defined and the Pixhawk controller is being used, it is intended in the purpose of this project that there are many already-defined vehicles and flight controllers, and users can simply plug their onboard controllers (a.k.a companion computer) to their vehicle and run an autonomous indoor/outdoor mission. PyPilot can also be used for manual flights, with your keyboard and the user interface provided. Our effort is to extend the compatibility of PyPilot across as many hardware/software as possible. Therefore you are more than welcome to integrate your own configuration and control/guidance model with PyPilot by pull requests.
+
+PyPilot demo of a quadcopter with Pixhawk controller (at Guided-NoGPS mode) and Vicon position estimation system:
+
+[![PyPilot on running.](https://img.youtube.com/vi/8WUousk9y-Y/0.jpg)](https://www.youtube.com/watch?v=8WUousk9y-Y)
 
 ### FAQ
 **1. Why PyPilot instead of ROS?**
